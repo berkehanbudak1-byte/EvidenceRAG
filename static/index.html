@@ -22,6 +22,10 @@
             </div>
         </header>
 
+        <div class="sample-banner" id="sampleBanner" hidden role="status">
+            Demo / sample data mode: answers come from fixture corpus helpers, not downloaded models.
+        </div>
+
         <main>
             <section class="hero">
                 <div>
@@ -31,6 +35,10 @@
                         EvidenceRAG yalnızca yüklediğin dokümanlardan ilgili parçaları bulur,
                         cevabı bu kanıtlarla oluşturur ve kaynakları görünür şekilde gösterir.
                     </p>
+                    <div class="api-key-row" id="apiKeyRow" hidden>
+                        <label for="apiKeyInput">X-API-Key (hosted)</label>
+                        <input id="apiKeyInput" type="password" autocomplete="off" placeholder="EVIDENCERAG_API_KEY">
+                    </div>
                 </div>
                 <div class="hero-orbit" aria-hidden="true">
                     <div class="orbit orbit-one"></div>

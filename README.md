@@ -116,7 +116,7 @@ Gerçek generation öncesinde tokenizer'ın `apply_chat_template` çıktısı b�
 
 ### Yerel erişim sınırı
 
-`ACCESS_PROFILE=local` varsayılan ve desteklenen tek profildir. `shared`, `public` veya başka bir değer başlangıçta hata verir; bir API key eklemek bunları etkinleştirmez. Public/LAN yayın, reverse proxy ve çok kullanıcı/tenant izolasyonu bu sürümde desteklenmez. Aynı makinedeki diğer proseslere karşı kullanıcı kimlik doğrulaması sağlanmaz; bütün yerel istemciler aynı store'u kullanır.
+`ACCESS_PROFILE=local` varsayılandır ve geriye uyumludur. `shared`, `public` veya bilinmeyen değerler başlangıçta hata verir. Aynı makinedeki diğer proseslere karşı kullanıcı kimlik doğrulaması sağlanmaz; bütün yerel istemciler aynı store'u kullanır.
 
 Launcher loopback'e bağlanır ve proxy başlıklarından peer türetmez. Uygulama ayrıca her HTTP isteğinde gerçek ASGI peer'inin loopback IP olmasını ve tek bir geçerli Host başlığını ister. Host allowlist `localhost`, `127.0.0.1`, köşeli parantezli `[::1]` ve bunların 1–65535 port varyantlarıdır. IPv6 kullanacaksanız aynı launcher'da `--host ::1` seçip `http://[::1]:8000/` açabilirsiniz. `localhost.evil.example`, userinfo, eksik/çoklu Host veya bozuk port kabul edilmez. Host kontrolü socket binding veya auth yerine geçmez.
 
@@ -124,7 +124,53 @@ POST/DELETE gibi mutasyonlarda Origin varsa scheme/host/etkin port olarak isteğ
 
 `Forwarded`, `X-Forwarded-For/Host/Proto/Port` ve `X-Real-IP` başlıkları değerlerine güvenilmeden reddedilir. Uzak peer, sahte localhost Host/Origin ile yerel kabul edilmez. Başlıkları kaldıran yerel bir reverse proxy'nin arkasındaki gerçek istemciyi uygulama ayırt edemez; bu nedenle proxy arkasında yerel erişim garantisi verilmez ve o dağıtım desteklenmez.
 
-Host/proxy hataları `400`, uzak peer veya uygun olmayan mutasyon Origin'i `403` ve mevcut `detail` biçimiyle döner; kontrol body parser, spool ve model/store işinden önce çalışır. `/`, `/static`, `/docs`, `/openapi.json`, `/health` ve belge/soru uçları aynı peer/Host sınırına tabidir. GET/HEAD/OPTIONS için Origin şartı yoktur. `/docs` yerelde açıktır; onu kapatmak erişim korumasının yerine geçmez. UI doğrulama hatalarını metin olarak gösterir; anahtar akışı veya browser storage eklenmemiştir.
+Host/proxy hataları `400`, uzak peer veya uygun olmayan mutasyon Origin'i `403` ve mevcut `detail` biçimiyle döner; kontrol body parser, spool ve model/store işinden önce çalışır. `/`, `/static`, `/docs`, `/openapi.json`, `/health` ve belge/soru uçları aynı peer/Host sınırına tabidir. GET/HEAD/OPTIONS için Origin şartı yoktur. `/docs` yerelde açıktır; onu kapatmak erişim korumasının yerine geçmez. UI doğrulama hatalarını metin olarak gösterir.
+
+### Hosted / cloud erişim profili (deploy)
+
+Canlı yayın için `ACCESS_PROFILE=hosted` (veya alias `cloud`) kullanılır. Bu profil **production-ready multi-tenant güvenlik iddiası taşımaz**; paylaşılan tek API anahtarı + Host allowlist ile mutasyonları sınırlar.
+
+Gerekli sırlar / ortam:
+
+| Değişken | Gerekli | Açıklama |
+| --- | --- | --- |
+| `ACCESS_PROFILE` | evet (`hosted` veya `cloud`) | Yerel loopback yerine hosted politikasını açar |
+| `EVIDENCERAG_API_KEY` | evet | `POST /ask`, `POST /documents`, `DELETE /documents/*` için `X-API-Key` (veya `Authorization: Bearer`) |
+| `EVIDENCERAG_PUBLIC_HOST` | evet | Virgülle ayrılmış izinli Host değerleri (`example.com`, `www.example.com:8443`) |
+| `HOST` | önerilir `0.0.0.0` | Uvicorn bind adresi; `0.0.0.0` ile dış arayüze dinleme |
+
+Korunan davranışlar:
+
+- Proxy başlıklarına (`Forwarded` / `X-Forwarded-*` / `X-Real-IP`) **hâlâ güvenilmez** ve istek reddedilir (`--no-proxy-headers` ile çalıştırın).
+- Host, `EVIDENCERAG_PUBLIC_HOST` allowlist'ine uymalıdır; Origin varsa Host/origin eşleşmesi gerekir.
+- GET `/`, `/static`, `/health`, `/docs` API key istemez; mutasyon ve `/ask` ister.
+- Tek paylaşılan anahtar vardır: kullanıcı/tenant izolasyonu, RBAC, rate limit, TLS sonlandırma veya reverse-proxy arkası kimlik doğrulama **yoktur**.
+
+Örnek:
+
+```bash
+export ACCESS_PROFILE=hosted
+export EVIDENCERAG_API_KEY='replace-me'
+export EVIDENCERAG_PUBLIC_HOST='my-app.example.com'
+uvicorn main:app --host 0.0.0.0 --port 8000 --no-proxy-headers
+curl -s http://my-app.example.com:8000/health
+curl -s -X POST http://my-app.example.com:8000/ask \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: $EVIDENCERAG_API_KEY" \
+  -d '{"question":"Örnek soru?"}'
+```
+
+UI, `access_profile=hosted` iken bir API key alanı gösterir; anahtar tarayıcıya kalıcı yazılmaz.
+
+### Demo / sample data (model indirmeden önizleme)
+
+`EVIDENCERAG_DEMO=true` (veya `auto`: model paketleri yoksa) GPU/Hugging Face indirmeden fixture corpus + deterministik yerel embedding/cevap üreticisi kullanır. `/ask` yanıtları `sample_data: true` taşır ve metinde **sample data** diye etiketlenir. Bu, gerçek model kalitesi değildir; publish önizlemesi içindir.
+
+```bash
+export ACCESS_PROFILE=local
+export EVIDENCERAG_DEMO=true
+uvicorn main:app --host 127.0.0.1 --port 4187 --no-proxy-headers
+```
 
 Belge metni ve dosya adı prompt'ta JSON verisi olarak serileştirilir; yeni satır, alıntı, kontrol ve `<...>` rol/delimiter işaretleri escape edilir. Soru aynı user rolünde ayrı serileştirilir; system rolü yalnız uygulama protokolünü taşır. Kaynak komutları atıf/ret protokolünü değiştiremez şeklinde açık sistem talimatı vardır. Bu, gerçek modelin kötü niyetli talimata uymayacağını kanıtlamaz; NO_EVIDENCE tam yanıt sözleşmesi ve semantik doğrulama sınırlamaları korunur. Dar serializer/DOM-stub testleri genel prompt-injection veya XSS denetimi değildir.
 
@@ -301,7 +347,7 @@ Betik uygulamayla aynı ayarları (environment ve `.env`) kullanır; `--threshol
 - **Threshold:** yalnız açık kalibrasyon verisinde `--tune` ve önceden tanımlı objective/constraint kullanılır. Eski 41 soru `legacy_regression` olarak korunur; yeni holdout değildir ve otomatik yeni eşik seçmez. Holdout'a kaydedilmiş seçim `--frozen-selection` ile sabit uygulanır.
 - **Cevaplar (`--llm`):** `lexical_match`, ret ve hata; bağımsız kökenli semantik rubric ayrı tutulur. Lexical eşleşme doğru cevap garantisi değildir. Generation süresi T07 invocation bayrağına göre hesaplanır; model retleri ve başlatılmış hatalar da sayılır.
 
-Her çalıştırma `experiments/results/` altına şema 2 JSON raporu yazar (git'e eklenmez); `--output` başka yerel hedef seçebilir. Dış dataset/corpus yolları desteklenir. Kaynak/model/prompt/index/split fingerprint'leri ve ham satırlar korunur; uyumsuz girdiler uyarısız birleştirilmez. Özel raporları public CI artifact'ına koymayın. Ayrıntılı şema, offset/context bütçesi ve ablation sözleşmesi: [experiments/eval/README.md](experiments/eval/README.md). Bu teslimde gerçek-model kalite/direnç baseline'ı ölçülmedi; `eval-history/fixture-baseline.json` yalnız sentetik mekanik örnektir.
+Her çalıştırma `experiments/results/` altına şema 2 JSON raporu yazar (git'e eklenmez); `--output` başka yerel hedef seçebilir. Dış dataset/corpus yolları desteklenir. Kaynak/model/prompt/index/split fingerprint'leri ve ham satırlar korunur; uyumsuz girdiler uyarısız birleştirilmez. Özel raporları public CI artifact'ına koymayın. Ayrıntılı şema, offset/context bütçesi ve ablation sözleşmesi: [experiments/eval/README.md](experiments/eval/README.md). Bu teslimde gerçek-model kalite/direnç baseline'ı ölçülmedi; `eval-history/fixture-baseline.json` yalnız sentetik mekanik örnektir. Model indirmeyen kaynak preflight özeti `eval-history/2026-11-26-source-preflight-baseline.json` dosyasındadır: `data_gate=source_labels_valid`, `quality_promotion_gate=not_evaluated`, retrieval/answer metrikleri bilinçli olarak `not_evaluated`.
 
 ## Proje yapısı
 

@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "created_at": "2026-11-26T04:46:04.423444+00:00",
+  "execution_kind": "source_preflight",
+  "mode": "preflight",
+  "status": "completed",
+  "data_gate": "source_labels_valid",
+  "quality_promotion_gate": "not_evaluated",
+  "model_resistance": "unmeasured",
+  "preflight_questions": 41,
+  "fingerprint": "6f1c36e405e9f8d304dc825c6d72b1c3d004b2da0e85ee80f4746564e6d71297",
+  "dataset": "/agent/repos/EvidenceRAG/experiments/eval/dataset.json",
+  "oracle_errors": {},
+  "identity": {
+    "dataset_sha256": "52ba35bbd3c67829c86b88ad4e14f8d8a607df5cc065ed44b2901e535ff84ed6",
+    "corpus": {
+      "izin_yonergesi.md": {
+        "source_sha256": "ce5d0b495dc4ef94a5800ddd289dd758924b578ce9c4290d5c80e354f4e32baa",
+        "file_sha256": "ce5d0b495dc4ef94a5800ddd289dd758924b578ce9c4290d5c80e354f4e32baa"
+      },
+      "mavi_korfez_2025.md": {
+        "source_sha256": "b9c421cb3c807951f9c4952c52c37a2a12ad46213f0e38909ea7d7a46571d10f",
+        "file_sha256": "b9c421cb3c807951f9c4952c52c37a2a12ad46213f0e38909ea7d7a46571d10f"
+      },
+      "ornek_rapor.md": {
+        "source_sha256": "ec7c6956e7b80bbfb0e39bccfa527cffd699ac11acf61b6ab2c7130526c81c68",
+        "file_sha256": "ec7c6956e7b80bbfb0e39bccfa527cffd699ac11acf61b6ab2c7130526c81c68"
+      }
+    },
+    "qrels_sha256": "e2dd94f574f745fbe2706b24d5abe373bb7175e9f9cc32f90dd2bb6b59add952",
+    "evaluator_source_sha256": "94715ef25aff2485fb7a39b6dbdbd860bf53a9b971401bde0c0e9c3882c31a7d",
+    "split_membership_count": 41
+  },
+  "metrics_offline": {
+    "retrieval": "not_evaluated",
+    "answers": "not_evaluated",
+    "note": "Model-free source preflight only; no embedding/LLM loaded."
+  },
+  "real_model": false
+}

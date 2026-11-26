@@ -92,6 +92,37 @@ def test_shared_profile_fails_even_with_an_unrelated_key(monkeypatch):
     with pytest.raises(ValueError): Settings(access_profile="shared")
 
 
+def test_hosted_profile_requires_api_key_and_public_host():
+    with pytest.raises(ValueError, match="EVIDENCERAG_API_KEY"):
+        Settings(access_profile="hosted", public_hosts=("example.com",))
+    with pytest.raises(ValueError, match="EVIDENCERAG_PUBLIC_HOST"):
+        Settings(access_profile="hosted", api_key="synthetic-test-key")
+    settings = Settings(access_profile="cloud", api_key="synthetic-test-key", public_hosts=("Example.COM", "app.example.com:8443"))
+    assert settings.access_profile == "hosted"
+    assert settings.public_hosts == ("example.com", "app.example.com:8443")
+
+
+def test_hosted_allows_remote_peer_with_api_key_and_public_host():
+    settings = Settings(access_profile="hosted", api_key="synthetic-test-key", public_hosts=("app.example.com",))
+    ok = scope(host="app.example.com", origin="http://app.example.com", peer="203.0.113.9", method="POST")
+    ok["path"] = "/ask"
+    ok["headers"] = ok["headers"] + [(b"x-api-key", b"synthetic-test-key")]
+    assert access_denial(ok, settings) is None
+    missing = scope(host="app.example.com", peer="203.0.113.9", method="POST")
+    missing["path"] = "/ask"
+    assert access_denial(missing, settings)[0] == 401
+    wrong_host = scope(host="evil.example", peer="203.0.113.9", method="GET")
+    assert access_denial(wrong_host, settings)[0] == 400
+    assert access_denial(scope(host="app.example.com", peer="203.0.113.9", method="GET", extra=[(b"x-forwarded-for", b"1.2.3.4")]), settings)[0] == 400
+
+
+def test_hosted_get_health_does_not_require_api_key():
+    settings = Settings(access_profile="hosted", api_key="synthetic-test-key", public_hosts=("app.example.com",))
+    health = scope(host="app.example.com", peer="203.0.113.9", method="GET")
+    health["path"] = "/health"
+    assert access_denial(health, settings) is None
+
+
 def test_real_app_origin_denial_has_zero_parser_or_pipeline_calls(monkeypatch):
     import app.request_limits as limits
     calls = []

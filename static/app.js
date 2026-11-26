@@ -15,6 +15,16 @@ const healthDot = document.getElementById("healthDot");
 const healthText = document.getElementById("healthText");
 const documentsList = document.getElementById("documentsList");
 const documentCount = document.getElementById("documentCount");
+const sampleBanner = document.getElementById("sampleBanner");
+const apiKeyRow = document.getElementById("apiKeyRow");
+const apiKeyInput = document.getElementById("apiKeyInput");
+
+function apiHeaders(extra = {}) {
+    const headers = { ...extra };
+    const key = apiKeyInput?.value?.trim();
+    if (key) headers["X-API-Key"] = key;
+    return headers;
+}
 
 fileInput.addEventListener("change", () => {
     updateSelectedFile(fileInput.files[0]);
@@ -77,7 +87,7 @@ async function uploadDocument() {
     try {
         const formData = new FormData();
         formData.append("file", file);
-        const response = await fetch("/documents", { method: "POST", body: formData });
+        const response = await fetch("/documents", { method: "POST", headers: apiHeaders(), body: formData });
         const data = await parseResponse(response);
 
         if (!response.ok) {
@@ -150,7 +160,10 @@ async function deleteDocument(doc, button) {
     button.disabled = true;
     clearFeedback(uploadFeedback);
     try {
-        const response = await fetch(`/documents/${encodeURIComponent(doc.document_id)}`, { method: "DELETE" });
+        const response = await fetch(`/documents/${encodeURIComponent(doc.document_id)}`, {
+            method: "DELETE",
+            headers: apiHeaders(),
+        });
         const data = await parseResponse(response);
         if (!response.ok) {
             throw new Error(data.detail || "Doküman silinemedi.");
@@ -176,7 +189,7 @@ async function askQuestion() {
     try {
         const response = await fetch("/ask", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: apiHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ question }),
         });
         const data = await parseResponse(response);
@@ -185,7 +198,7 @@ async function askQuestion() {
             throw new Error(data.diagnostics?.reason === "busy" ? "Servis meşgul; lütfen daha sonra tekrar dene." : (data.detail || "Cevap oluşturulamadı."));
         }
 
-        renderAnswer(data.answer, data.sources || [], data.verification, data.diagnostics);
+        renderAnswer(data.answer, data.sources || [], data.verification, data.diagnostics, data.sample_data);
     } catch (error) {
         showFeedback(askFeedback, error.message, true);
     } finally {
@@ -199,8 +212,15 @@ async function refreshHealth() {
         const data = await response.json();
         if (!response.ok) throw new Error();
         healthDot.classList.add("online");
-        healthText.textContent = `Backend bağlı · ${data.indexed_chunks} chunk hazır`;
+        const demoNote = data.demo_mode || data.sample_data ? " · sample data" : "";
+        healthText.textContent = `Backend bağlı · ${data.indexed_chunks} chunk hazır${demoNote}`;
         chunkCount.textContent = data.indexed_chunks;
+        if (sampleBanner) {
+            sampleBanner.hidden = !(data.demo_mode || data.sample_data);
+        }
+        if (apiKeyRow) {
+            apiKeyRow.hidden = data.access_profile !== "hosted";
+        }
     } catch {
         healthDot.classList.remove("online");
         healthText.textContent = "Backend bağlantısı yok";
@@ -217,7 +237,7 @@ async function parseResponse(response) {
     return data;
 }
 
-function renderAnswer(answer, sources, verification, diagnostics) {
+function renderAnswer(answer, sources, verification, diagnostics, sampleData) {
     answerCard.className = "answer-card answer-ready";
     answerCard.replaceChildren();
 
@@ -228,7 +248,8 @@ function renderAnswer(answer, sources, verification, diagnostics) {
     const content = document.createElement("div");
     const label = document.createElement("p");
     label.className = "answer-label";
-    label.textContent = diagnostics?.reason === "model_no_evidence" ? "Model yeterli kanıt bulamadı"
+    label.textContent = sampleData ? "Sample data · demo yanıtı (gerçek model değil)"
+        : diagnostics?.reason === "model_no_evidence" ? "Model yeterli kanıt bulamadı"
         : diagnostics?.reason === "retrieval_no_evidence" ? "Uygun kaynak bulunamadı"
         : sources.length ? "Kaynaklar bulundu · uyarılar doğruluk garantisi değildir" : "Yanıt";
     const answerText = document.createElement("div");
