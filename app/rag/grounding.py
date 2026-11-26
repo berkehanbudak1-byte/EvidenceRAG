@@ -686,3 +686,99 @@ def build_citation_coverage_matrix(answer, evidence):
         "orphan_citations": sorted(orphan_citations),
         "matrix": matrix,
     }
+
+
+_INJECTION_PATTERNS = (
+    re.compile(r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions", re.IGNORECASE),
+    re.compile(r"system\s*prompt\s*override", re.IGNORECASE),
+    re.compile(r"you\s+are\s+now\s+in\s+developer\s+mode", re.IGNORECASE),
+    re.compile(r"<\s*/?\s*(?:system|instruction|admin_override|prompt)\s*>", re.IGNORECASE),
+)
+
+
+def scrub_url_credentials(text):
+    """Mask user:pass@ and secret query params in URLs (Agent-Reach security layer)."""
+    s = str(text or "")
+    s = re.sub(r"(https?://)([^/\s:@]+:[^/\s@]+@)", r"\1***@", s)
+    s = re.sub(
+        r"([?&](?:api_key|apikey|token|access_token|secret|password|key)=)[^&\s]+",
+        r"\1***",
+        s,
+        flags=re.IGNORECASE,
+    )
+    return s
+
+
+def sanitize_untrusted_evidence(text):
+    """Neutralize XML tag escapes and indirect prompt injection directives in retrieved evidence."""
+    s = scrub_url_credentials(text)
+    s = re.sub(
+        r"<\s*(/?)\s*(system|instruction|evidence|untrusted_data)\b[^>]*>",
+        r"[\1\2]",
+        s,
+        flags=re.IGNORECASE,
+    )
+    for pat in _INJECTION_PATTERNS:
+        s = pat.sub("[INJECTION_FILTERED]", s)
+    return s
+
+
+def wrap_untrusted_evidence(evidence_items):
+    """Wrap retrieved evidence chunks in <untrusted_data> envelopes with injection flags (Neon security architecture)."""
+    wrapped_items = []
+    flagged_count = 0
+    for idx, item in enumerate(evidence_items or [], start=1):
+        raw_text = str(item.get("text", "") if isinstance(item, dict) else item)
+        flagged = any(pat.search(raw_text) for pat in _INJECTION_PATTERNS)
+        if flagged:
+            flagged_count += 1
+        clean_text = sanitize_untrusted_evidence(raw_text)
+        source_id = str(item.get("source", f"evidence_{idx}") if isinstance(item, dict) else f"evidence_{idx}")
+        safe_source = re.sub(r"[^a-zA-Z0-9_.:/-]", "_", source_id)[:60]
+        envelope = (
+            f'<untrusted_data id="{idx}" source="{safe_source}" '
+            f'injection_flagged="{str(flagged).lower()}">\n{clean_text}\n</untrusted_data>'
+        )
+        entry = dict(item) if isinstance(item, dict) else {"text": raw_text}
+        entry["clean_text"] = clean_text
+        entry["wrapped"] = envelope
+        entry["injection_flagged"] = flagged
+        wrapped_items.append(entry)
+    return {
+        "items": wrapped_items,
+        "flagged_count": flagged_count,
+        "safe": flagged_count == 0,
+    }
+
+
+def verify_number_traceability(answer, evidence):
+    """Verify that every number in the output traces back to at least one input evidence file/chunk (Neon DONE WHEN contract)."""
+    cleaned_answer = _CITATION.sub(" ", str(answer or ""))
+    source_map = {}
+    for idx, item in enumerate(evidence or [], start=1):
+        txt = str(item.get("text", "") if isinstance(item, dict) else item)
+        src = str(item.get("source", f"evidence_{idx}") if isinstance(item, dict) else f"evidence_{idx}")
+        for num in _NUMBER.findall(txt):
+            norm_num = _normalize_number(num)
+            source_map.setdefault(norm_num, [])
+            if src not in source_map[norm_num]:
+                source_map[norm_num].append(src)
+
+    traced = []
+    untraced = []
+    for num in _NUMBER.findall(cleaned_answer):
+        norm_num = _normalize_number(num)
+        if norm_num in source_map:
+            traced.append({"number": num, "normalized": norm_num, "sources": source_map[norm_num]})
+        else:
+            if num not in untraced:
+                untraced.append(num)
+
+    total = len(traced) + len(untraced)
+    return {
+        "done_when_passed": len(untraced) == 0,
+        "traceability_ratio": round(len(traced) / total, 4) if total > 0 else 1.0,
+        "traced": traced,
+        "untraced": untraced,
+    }
+
