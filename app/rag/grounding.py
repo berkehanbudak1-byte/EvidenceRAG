@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import re
 
 
@@ -394,3 +395,294 @@ def detect_evidence_conflicts(chunks, answer=""):
         "consensus_score": consensus_score,
     }
 
+
+_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+_OFFICIAL_AUTHORITY_KEYWORDS = (
+    "resmi gazete", "yönetmelik", "yönerge", "kanun", "tebliğ",
+    "faaliyet raporu", "belediye", "bakanlık", "tüik", "tcmb",
+    "sayıştay", "tutanak", "official", "regulation", "directive",
+    "statute", ".gov", ".bel.tr",
+)
+
+_INSTITUTIONAL_AUTHORITY_KEYWORDS = (
+    "rapor", "prosedür", "şartname", "bayi", "kurumsal", "sözleşme",
+    "audit", "report", "policy", "manual", "handbook",
+)
+
+_SECONDARY_AUTHORITY_KEYWORDS = (
+    "blog", "forum", "sosyal medya", "yorum", "taslak",
+    "draft", "unverified", "rumor", "wiki", "anonymous",
+)
+
+
+def _extract_year_from_string(value, max_year):
+    if not value:
+        return None
+    years = [
+        int(match)
+        for match in _YEAR_RE.findall(str(value))
+        if 1990 <= int(match) <= max_year
+    ]
+    return max(years) if years else None
+
+
+def score_evidence_freshness_and_authority(evidence, reference_year=None):
+    """Score retrieved evidence chunks by temporal freshness and source authority tier."""
+    ref_year = (
+        int(reference_year)
+        if reference_year is not None
+        else datetime.now(timezone.utc).year
+    )
+
+    if not evidence:
+        return {
+            "reference_year": ref_year,
+            "overall_freshness_score": 0.0,
+            "overall_authority_score": 0.0,
+            "combined_trust_score": 0.0,
+            "trust_grade": "INSUFFICIENT",
+            "stale_source_count": 0,
+            "items": [],
+        }
+
+    scored_items = []
+    stale_count = 0
+
+    for idx, raw_item in enumerate(evidence, start=1):
+        if isinstance(raw_item, dict):
+            nested = raw_item.get("metadata") if isinstance(raw_item.get("metadata"), dict) else {}
+            merged = {**nested, **raw_item}
+        else:
+            merged = {"text": str(raw_item)}
+
+        text = str(merged.get("text") or "")
+        filename = str(merged.get("filename") or "")
+        source = str(merged.get("source") or "")
+        source_type = str(merged.get("source_type") or merged.get("authority_tier") or "").strip().lower()
+
+        detected_year = None
+        for key in ("published_year", "year"):
+            val = merged.get(key)
+            if isinstance(val, (int, float)) and 1990 <= int(val) <= ref_year + 1:
+                detected_year = int(val)
+                break
+
+        if detected_year is None:
+            for key in ("updated_at", "published_at", "date", "uploaded_at"):
+                detected_year = _extract_year_from_string(merged.get(key), ref_year + 1)
+                if detected_year is not None:
+                    break
+
+        if detected_year is None:
+            detected_year = _extract_year_from_string(f"{filename} {source}", ref_year + 1)
+
+        if detected_year is None:
+            detected_year = _extract_year_from_string(text, ref_year + 1)
+
+        if detected_year is not None:
+            age_years = max(0, ref_year - detected_year)
+            if age_years == 0:
+                freshness_score = 1.0
+            elif age_years == 1:
+                freshness_score = 0.9
+            elif age_years == 2:
+                freshness_score = 0.78
+            elif age_years == 3:
+                freshness_score = 0.64
+            elif age_years == 4:
+                freshness_score = 0.5
+            else:
+                freshness_score = round(max(0.2, 0.5 - 0.06 * (age_years - 4)), 4)
+
+            if age_years <= 1:
+                freshness_label = "CURRENT"
+            elif age_years <= 3:
+                freshness_label = "RECENT"
+            else:
+                freshness_label = "STALE"
+                stale_count += 1
+        else:
+            age_years = None
+            freshness_score = 0.6
+            freshness_label = "UNKNOWN_AGE"
+
+        combined_meta_text = f"{source_type} {filename} {source} {text}".lower()
+        if source_type in {"official", "primary", "regulation", "legal", "government", "statute"}:
+            authority_tier = "OFFICIAL"
+            authority_score = 0.95
+        elif source_type in {"institutional", "verified_internal", "internal", "report", "policy"}:
+            authority_tier = "INSTITUTIONAL"
+            authority_score = 0.82
+        elif source_type in {"secondary", "community", "blog", "forum", "draft", "unverified"}:
+            authority_tier = "SECONDARY"
+            authority_score = 0.52
+        elif any(kw in combined_meta_text for kw in _SECONDARY_AUTHORITY_KEYWORDS):
+            authority_tier = "SECONDARY"
+            authority_score = 0.52
+        elif any(kw in combined_meta_text for kw in _OFFICIAL_AUTHORITY_KEYWORDS):
+            authority_tier = "OFFICIAL"
+            authority_score = 0.95
+        elif any(kw in combined_meta_text for kw in _INSTITUTIONAL_AUTHORITY_KEYWORDS) or filename.lower().endswith(".pdf"):
+            authority_tier = "INSTITUTIONAL"
+            authority_score = 0.82
+        else:
+            authority_tier = "STANDARD"
+            authority_score = 0.68
+
+        if merged.get("ocr") is True:
+            authority_score = round(max(0.1, authority_score - 0.05), 4)
+
+        trust_score = round((0.45 * freshness_score) + (0.55 * authority_score), 4)
+
+        scored_items.append({
+            "evidence_index": idx,
+            "filename": filename or None,
+            "source": source or None,
+            "detected_year": detected_year,
+            "age_years": age_years,
+            "freshness_label": freshness_label,
+            "freshness_score": round(freshness_score, 4),
+            "authority_tier": authority_tier,
+            "authority_score": round(authority_score, 4),
+            "trust_score": trust_score,
+        })
+
+    count = len(scored_items)
+    overall_freshness = round(sum(item["freshness_score"] for item in scored_items) / count, 4)
+    overall_authority = round(sum(item["authority_score"] for item in scored_items) / count, 4)
+    combined_trust = round(sum(item["trust_score"] for item in scored_items) / count, 4)
+
+    if combined_trust >= 0.8:
+        trust_grade = "HIGH"
+    elif combined_trust >= 0.6:
+        trust_grade = "MODERATE"
+    elif combined_trust > 0.0:
+        trust_grade = "LOW"
+    else:
+        trust_grade = "INSUFFICIENT"
+
+    return {
+        "reference_year": ref_year,
+        "overall_freshness_score": overall_freshness,
+        "overall_authority_score": overall_authority,
+        "combined_trust_score": combined_trust,
+        "trust_grade": trust_grade,
+        "stale_source_count": stale_count,
+        "items": scored_items,
+    }
+
+
+def build_citation_coverage_matrix(answer, evidence):
+    """Build a sentence-by-sentence citation coverage matrix linking claims to evidence sources."""
+    evidence_list = evidence or []
+    total_evidence = len(evidence_list)
+
+    if not answer or not answer.strip():
+        return {
+            "sentence_count": 0,
+            "cited_sentence_count": 0,
+            "uncited_sentence_count": 0,
+            "sentence_citation_coverage_ratio": 0.0,
+            "used_evidence_indices": [],
+            "unused_evidence_indices": list(range(1, total_evidence + 1)),
+            "evidence_utilization_ratio": 0.0,
+            "orphan_citations": [],
+            "matrix": [],
+        }
+
+    evidence_texts = []
+    evidence_numbers = []
+    for item in evidence_list:
+        text = item.get("text", "") if isinstance(item, dict) else str(item)
+        evidence_texts.append(text.lower())
+        evidence_numbers.append({_normalize_number(n) for n in _NUMBER.findall(text)})
+
+    raw_sentences = [seg.strip() for seg in _SENTENCE_SPLIT.split(answer.strip()) if seg.strip()]
+    matrix = []
+    used_evidence = set()
+    orphan_citations = set()
+    cited_sentence_count = 0
+
+    for sent_idx, raw_sentence in enumerate(raw_sentences, start=1):
+        found_cits = sorted({int(m.group(1)) for m in _CITATION.finditer(raw_sentence)})
+        valid_cits = [c for c in found_cits if 1 <= c <= total_evidence]
+        invalid_cits = [c for c in found_cits if c not in valid_cits]
+
+        used_evidence.update(valid_cits)
+        orphan_citations.update(invalid_cits)
+
+        clean_text = _CITATION.sub(" ", raw_sentence).strip()
+        clean_text = re.sub(r"\s+", " ", clean_text).strip(" .;")
+        if not clean_text:
+            continue
+
+        if valid_cits:
+            cited_sentence_count += 1
+
+        tokens = [
+            tok.lower()
+            for tok in _WORD_TOKEN.findall(clean_text)
+            if len(tok) >= 3 and tok.lower() not in _STOPWORDS and not tok.isdigit()
+        ]
+        norm_nums = [_normalize_number(n) for n in _NUMBER.findall(clean_text)]
+        total_units = len(tokens) + len(norm_nums)
+
+        evidence_links = {}
+        for ev_idx in range(1, total_evidence + 1):
+            ev_text = evidence_texts[ev_idx - 1]
+            ev_nums = evidence_numbers[ev_idx - 1]
+            if total_units > 0:
+                term_hits = sum(1 for tok in tokens if tok[:4] in ev_text)
+                num_hits = sum(1 for num in norm_nums if num in ev_nums)
+                alignment = round((term_hits + num_hits) / total_units, 4)
+            else:
+                alignment = 0.0
+
+            evidence_links[ev_idx] = {
+                "cited": ev_idx in valid_cits,
+                "alignment_score": alignment,
+            }
+
+        if invalid_cits and not valid_cits:
+            coverage_status = "INVALID_CITATION"
+        elif invalid_cits:
+            coverage_status = "CITED_WITH_INVALID"
+        elif valid_cits:
+            coverage_status = "CITED"
+        else:
+            coverage_status = "UNCITED"
+
+        matrix.append({
+            "sentence_index": len(matrix) + 1,
+            "text": clean_text,
+            "cited_evidence": valid_cits,
+            "invalid_citations": invalid_cits,
+            "is_cited": len(valid_cits) > 0,
+            "coverage_status": coverage_status,
+            "source_vector": [ev_idx in valid_cits for ev_idx in range(1, total_evidence + 1)],
+            "evidence_links": evidence_links,
+        })
+
+    sentence_count = len(matrix)
+    uncited_sentence_count = sentence_count - cited_sentence_count
+    sentence_coverage_ratio = (
+        round(cited_sentence_count / sentence_count, 4) if sentence_count > 0 else 0.0
+    )
+    used_sorted = sorted(used_evidence)
+    unused_sorted = [i for i in range(1, total_evidence + 1) if i not in used_evidence]
+    evidence_utilization_ratio = (
+        round(len(used_sorted) / total_evidence, 4) if total_evidence > 0 else 0.0
+    )
+
+    return {
+        "sentence_count": sentence_count,
+        "cited_sentence_count": cited_sentence_count,
+        "uncited_sentence_count": uncited_sentence_count,
+        "sentence_citation_coverage_ratio": sentence_coverage_ratio,
+        "used_evidence_indices": used_sorted,
+        "unused_evidence_indices": unused_sorted,
+        "evidence_utilization_ratio": evidence_utilization_ratio,
+        "orphan_citations": sorted(orphan_citations),
+        "matrix": matrix,
+    }

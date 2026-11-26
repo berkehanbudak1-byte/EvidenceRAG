@@ -221,3 +221,101 @@ def test_detect_evidence_conflicts_numeric_polarity_and_consensus():
     assert "ANSWER_EVIDENCE_MISMATCH" in conflict_types
     assert conflict_report["consensus_score"] < 1.0
 
+
+def test_score_evidence_freshness_and_authority():
+    from app.rag.grounding import score_evidence_freshness_and_authority
+
+    empty_report = score_evidence_freshness_and_authority([], reference_year=2026)
+    assert empty_report["trust_grade"] == "INSUFFICIENT"
+    assert empty_report["combined_trust_score"] == 0.0
+    assert empty_report["items"] == []
+
+    sources = [
+        {
+            "filename": "mavi_korfez_2025.md",
+            "source": "https://mavikorfez.bel.tr/faaliyet-raporu-2025",
+            "text": "Mavi Körfez Belediyesi 2025 yılı faaliyet raporu resmi bütçe verileri.",
+        },
+        {
+            "filename": "eski_forum_yorumu.txt",
+            "source_type": "blog",
+            "published_year": 2019,
+            "text": "2019 yılında forumda paylaşılan doğrulanmamış yorum.",
+        },
+        {
+            "text": "Kurumsal altyapı denetim raporu özetidir.",
+            "metadata": {
+                "filename": "denetim.pdf",
+                "uploaded_at": "2024-05-12T10:00:00+00:00",
+                "ocr": True,
+            },
+        },
+    ]
+
+    report = score_evidence_freshness_and_authority(sources, reference_year=2026)
+    assert report["reference_year"] == 2026
+    assert report["stale_source_count"] == 1
+    assert len(report["items"]) == 3
+
+    official_item, stale_item, ocr_item = report["items"]
+    assert official_item["authority_tier"] == "OFFICIAL"
+    assert official_item["freshness_label"] == "CURRENT"
+    assert official_item["detected_year"] == 2025
+    assert official_item["trust_score"] > 0.85
+
+    assert stale_item["authority_tier"] == "SECONDARY"
+    assert stale_item["freshness_label"] == "STALE"
+    assert stale_item["age_years"] == 7
+    assert stale_item["trust_score"] < official_item["trust_score"]
+
+    assert ocr_item["authority_tier"] == "INSTITUTIONAL"
+    assert ocr_item["detected_year"] == 2024
+    assert ocr_item["authority_score"] == 0.77
+    assert report["trust_grade"] in ("MODERATE", "HIGH")
+
+
+def test_build_citation_coverage_matrix():
+    from app.rag.grounding import build_citation_coverage_matrix
+
+    sources = [
+        {"text": "Su kayıp oranı yüzde 31'den yüzde 22'ye düştü."},
+        {"text": "Tramvay hattı günde 21.500 yolcu taşıyor."},
+        {"text": "Sahil parkına 1.150 ağaç dikildi."},
+    ]
+
+    empty_matrix = build_citation_coverage_matrix("   ", sources)
+    assert empty_matrix["sentence_count"] == 0
+    assert empty_matrix["unused_evidence_indices"] == [1, 2, 3]
+    assert empty_matrix["matrix"] == []
+
+    answer = (
+        "Su kayıp oranı yüzde 22 seviyesine düştü [Kanıt 1]. "
+        "Belediye ek olarak yeni duraklar açmayı planlıyor. "
+        "Tramvay günde 21.500 yolcu taşıyor [Kanıt 2] [Kanıt 5]."
+    )
+    cov = build_citation_coverage_matrix(answer, sources)
+
+    assert cov["sentence_count"] == 3
+    assert cov["cited_sentence_count"] == 2
+    assert cov["uncited_sentence_count"] == 1
+    assert cov["sentence_citation_coverage_ratio"] == 0.6667
+    assert cov["used_evidence_indices"] == [1, 2]
+    assert cov["unused_evidence_indices"] == [3]
+    assert cov["evidence_utilization_ratio"] == 0.6667
+    assert cov["orphan_citations"] == [5]
+
+    row1, row2, row3 = cov["matrix"]
+    assert row1["coverage_status"] == "CITED"
+    assert row1["source_vector"] == [True, False, False]
+    assert row1["evidence_links"][1]["cited"] is True
+    assert row1["evidence_links"][1]["alignment_score"] > row1["evidence_links"][2]["alignment_score"]
+
+    assert row2["coverage_status"] == "UNCITED"
+    assert row2["is_cited"] is False
+    assert row2["source_vector"] == [False, False, False]
+
+    assert row3["coverage_status"] == "CITED_WITH_INVALID"
+    assert row3["cited_evidence"] == [2]
+    assert row3["invalid_citations"] == [5]
+    assert row3["evidence_links"][2]["alignment_score"] > 0.5
+
