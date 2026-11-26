@@ -152,3 +152,43 @@ def test_calculate_evidence_confidence_grades_and_penalties():
     metrics_empty = calculate_evidence_confidence([], None)
     assert metrics_empty["grade"] == "INSUFFICIENT"
     assert metrics_empty["confidence_score"] == 0.0
+
+
+def test_expand_query_terms_adds_domain_synonyms():
+    from app.rag.grounding import expand_query_terms
+
+    expanded = expand_query_terms("Su ve ulaşım bütçesi ne kadar?")
+    assert "su" in expanded["base_terms"]
+    assert "ulaşım" in expanded["base_terms"]
+    assert "tramvay" in expanded["expanded_terms"]
+    assert "içme suyu" in expanded["expanded_terms"]
+    assert "ödenek" in expanded["expanded_terms"]
+
+    empty = expand_query_terms("   ")
+    assert empty["base_terms"] == []
+    assert empty["expanded_terms"] == []
+
+
+def test_extract_key_claims_and_claim_verification_report():
+    from app.rag.grounding import claim_verification_report, extract_key_claims
+
+    answer = (
+        "Su kaybı %31'den %22'ye düştü [Kanıt 1]; "
+        "tramvay günde 21.500 yolcu taşıyor [Kanıt 2]. "
+        "Yeni metro hattı 999 milyon liraya tamamlandı [Kanıt 1]."
+    )
+    claims = extract_key_claims(answer)
+    assert len(claims) == 3
+    assert claims[0]["citations"] == [1]
+    assert claims[0]["numbers"] == ["31", "22"]
+    assert claims[1]["citations"] == [2]
+    assert claims[1]["numbers"] == ["21.500"]
+
+    report = claim_verification_report(answer, EVIDENCE)
+    assert report["total_claims"] == 3
+    assert report["supported_claims"] == 2
+    assert report["claims"][0]["supported"] is True
+    assert report["claims"][1]["supported"] is True
+    assert report["claims"][2]["supported"] is False
+    assert report["claims"][2]["unsupported_numbers"] == ["999"]
+
