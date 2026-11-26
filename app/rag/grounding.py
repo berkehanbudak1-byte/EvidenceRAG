@@ -270,3 +270,127 @@ def claim_verification_report(answer, evidence):
         "claims": evaluated_claims,
     }
 
+
+_POSITIVE_POLARITY = {
+    "arttı", "yükseldi", "tamamlandı", "açıldı", "başarılı", "kazandı", "büyüdü",
+    "increased", "rose", "completed", "approved",
+}
+_NEGATIVE_POLARITY = {
+    "azaldı", "düştü", "iptal", "ertelendi", "başarısız", "reddedildi", "küçüldü",
+    "decreased", "fell", "cancelled", "delayed", "rejected",
+}
+
+
+def detect_evidence_conflicts(chunks, answer=""):
+    """Detect conflicting numeric values, dates, or polarity statements across retrieved evidence chunks."""
+    if not chunks or len(chunks) < 2:
+        return {
+            "has_conflicts": False,
+            "conflict_count": 0,
+            "conflicts": [],
+            "consensus_score": 1.0 if chunks else 0.0,
+        }
+
+    parsed_chunks = []
+    for idx, item in enumerate(chunks, start=1):
+        text = item.get("text", "") if isinstance(item, dict) else str(item)
+        clean_lower = text.lower()
+        tokens = [
+            tok.lower()
+            for tok in _WORD_TOKEN.findall(text)
+            if len(tok) >= 3 and tok.lower() not in _STOPWORDS and not tok.isdigit()
+        ]
+        raw_nums = _NUMBER.findall(text)
+        norm_nums = []
+        for n in raw_nums:
+            nn = _normalize_number(n)
+            if nn not in norm_nums:
+                norm_nums.append(nn)
+
+        pos_hits = [w for w in _POSITIVE_POLARITY if w in clean_lower]
+        neg_hits = [w for w in _NEGATIVE_POLARITY if w in clean_lower]
+
+        parsed_chunks.append({
+            "source_index": idx,
+            "text": text,
+            "tokens": set(tokens),
+            "numbers": norm_nums,
+            "pos_hits": pos_hits,
+            "neg_hits": neg_hits,
+        })
+
+    conflicts = []
+    pair_count = 0
+
+    for i in range(len(parsed_chunks)):
+        for j in range(i + 1, len(parsed_chunks)):
+            pair_count += 1
+            c1 = parsed_chunks[i]
+            c2 = parsed_chunks[j]
+
+            shared_terms = sorted(c1["tokens"] & c2["tokens"])
+            if not shared_terms:
+                continue
+
+            # 1. Numeric / Date divergence on shared subject
+            if c1["numbers"] and c2["numbers"]:
+                set1 = set(c1["numbers"])
+                set2 = set(c2["numbers"])
+                if set1 != set2 and not set1.issubset(set2) and not set2.issubset(set1):
+                    conflicts.append({
+                        "type": "NUMERIC_DISCREPANCY",
+                        "sources": [c1["source_index"], c2["source_index"]],
+                        "shared_terms": shared_terms[:5],
+                        "values": {
+                            str(c1["source_index"]): c1["numbers"],
+                            str(c2["source_index"]): c2["numbers"],
+                        },
+                        "description": (
+                            f"Kanıt {c1['source_index']} ({', '.join(c1['numbers'])}) ile "
+                            f"Kanıt {c2['source_index']} ({', '.join(c2['numbers'])}) arasında sayısal farklılık."
+                        ),
+                    })
+
+            # 2. Polarity / directional contradiction on shared subject
+            c1_pos_only = bool(c1["pos_hits"]) and not bool(c1["neg_hits"])
+            c1_neg_only = bool(c1["neg_hits"]) and not bool(c1["pos_hits"])
+            c2_pos_only = bool(c2["pos_hits"]) and not bool(c2["neg_hits"])
+            c2_neg_only = bool(c2["neg_hits"]) and not bool(c2["pos_hits"])
+
+            if (c1_pos_only and c2_neg_only) or (c1_neg_only and c2_pos_only):
+                conflicts.append({
+                    "type": "POLARITY_CONTRADICTION",
+                    "sources": [c1["source_index"], c2["source_index"]],
+                    "shared_terms": shared_terms[:5],
+                    "values": {
+                        str(c1["source_index"]): c1["pos_hits"] or c1["neg_hits"],
+                        str(c2["source_index"]): c2["pos_hits"] or c2["neg_hits"],
+                    },
+                    "description": (
+                        f"Kanıt {c1['source_index']} ile Kanıt {c2['source_index']} arasında yön/durum çelişkisi."
+                    ),
+                })
+
+    if answer and answer.strip():
+        ver = verify_answer(answer, chunks)
+        if ver["unsupported_numbers"]:
+            conflicts.append({
+                "type": "ANSWER_EVIDENCE_MISMATCH",
+                "sources": ver["citations"],
+                "shared_terms": [],
+                "values": {"unsupported_numbers": ver["unsupported_numbers"]},
+                "description": (
+                    f"Yanıtta kanıtlarda bulunmayan sayılar mevcut: {', '.join(ver['unsupported_numbers'])}."
+                ),
+            })
+
+    penalty = min(1.0, len(conflicts) / max(1, pair_count))
+    consensus_score = round(max(0.0, 1.0 - (penalty * 0.6)), 4)
+
+    return {
+        "has_conflicts": len(conflicts) > 0,
+        "conflict_count": len(conflicts),
+        "conflicts": conflicts,
+        "consensus_score": consensus_score,
+    }
+

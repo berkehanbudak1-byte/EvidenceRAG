@@ -192,3 +192,32 @@ def test_extract_key_claims_and_claim_verification_report():
     assert report["claims"][2]["supported"] is False
     assert report["claims"][2]["unsupported_numbers"] == ["999"]
 
+
+def test_detect_evidence_conflicts_numeric_polarity_and_consensus():
+    from app.rag.grounding import detect_evidence_conflicts
+
+    consistent_chunks = [
+        {"text": "Tramvay hattı günde 21.500 yolcu taşıyor."},
+        {"text": "Yeşil alan miktarı kişi başı 5,8 metrekare olarak ölçüldü."},
+    ]
+    clean_report = detect_evidence_conflicts(consistent_chunks)
+    assert clean_report["has_conflicts"] is False
+    assert clean_report["conflict_count"] == 0
+    assert clean_report["consensus_score"] == 1.0
+
+    conflicting_chunks = [
+        {"text": "Tramvay projesi bütçesi 86 milyon lira oldu ve yolcu sayısı arttı."},
+        {"text": "Tramvay projesi bütçesi 112 milyon lira oldu ve yolcu sayısı azaldı."},
+    ]
+    conflict_report = detect_evidence_conflicts(
+        conflicting_chunks,
+        answer="Tramvay projesi bütçesi 150 milyon lira oldu [Kanıt 1].",
+    )
+    assert conflict_report["has_conflicts"] is True
+    assert conflict_report["conflict_count"] >= 2
+    conflict_types = {c["type"] for c in conflict_report["conflicts"]}
+    assert "NUMERIC_DISCREPANCY" in conflict_types
+    assert "POLARITY_CONTRADICTION" in conflict_types
+    assert "ANSWER_EVIDENCE_MISMATCH" in conflict_types
+    assert conflict_report["consensus_score"] < 1.0
+
