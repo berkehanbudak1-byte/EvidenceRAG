@@ -70,6 +70,10 @@ def test_pipeline_indexes_documents_and_returns_sources(tmp_path: Path):
         "unsupported_numbers": [],
         "question_only_numbers": [],
     }
+    confidence = pipeline.evaluate_answer_confidence(answer)
+    assert confidence["grade"] == "HIGH"
+    assert confidence["citation_coverage_ratio"] == 1.0
+    assert confidence["confidence_score"] >= 0.8
 
 
 def test_pipeline_reports_insufficient_evidence(tmp_path: Path):

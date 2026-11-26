@@ -128,3 +128,27 @@ CASES = json.loads((Path(__file__).parent / "fixtures/answer_contract/cases.json
 @pytest.mark.parametrize("case", [case for case in CASES if "verification" in case], ids=lambda case: case["id"])
 def test_answer_contract_fixtures(case):
     assert verify_answer(case["answer"], [{"text": case["evidence"]}], case.get("question", "")) == case["verification"]
+
+
+def test_calculate_evidence_confidence_grades_and_penalties():
+    from app.rag.grounding import calculate_evidence_confidence
+
+    high_ev = [
+        {"text": "Su kaybı %22.", "score": 0.92},
+        {"text": "Tramvay 21.500 yolcu.", "score": 0.88},
+    ]
+    ver_high = verify_answer("Su kaybı %22 [Kanıt 1] ve 21500 yolcu [Kanıt 2].", high_ev)
+    metrics_high = calculate_evidence_confidence(high_ev, ver_high)
+    assert metrics_high["grade"] == "HIGH"
+    assert metrics_high["citation_coverage_ratio"] == 1.0
+    assert metrics_high["cited_source_count"] == 2
+    assert metrics_high["confidence_score"] >= 0.8
+
+    ver_penalized = verify_answer("Su kaybı %99 [Kanıt 1] [Kanıt 5].", high_ev)
+    metrics_penalized = calculate_evidence_confidence(high_ev, ver_penalized)
+    assert metrics_penalized["confidence_score"] < metrics_high["confidence_score"]
+    assert metrics_penalized["grade"] in ("MODERATE", "LOW")
+
+    metrics_empty = calculate_evidence_confidence([], None)
+    assert metrics_empty["grade"] == "INSUFFICIENT"
+    assert metrics_empty["confidence_score"] == 0.0

@@ -8,7 +8,7 @@ from .config import InputLimitError, Settings
 from .document_loader import load_document
 from .embedding import embed_texts
 from .generation import generate_answer
-from .grounding import verify_answer
+from .grounding import calculate_evidence_confidence, verify_answer
 from .prompt import NO_EVIDENCE_MARKER, build_messages
 from .retrieval import retrieve
 from .reranking import rerank
@@ -163,6 +163,15 @@ class RAGPipeline:
             "sources": _sources_from(evidence, verification["citations"]),
             "verification": verification,
         }
+
+    def evaluate_answer_confidence(self, answer_payload):
+        """Compute explicit evidence density and confidence score from an ask() response payload."""
+        if not answer_payload or not answer_payload.get("verification"):
+            return calculate_evidence_confidence([], None)
+        return calculate_evidence_confidence(
+            answer_payload.get("sources", []),
+            answer_payload.get("verification"),
+        )
 
     def preload_models(self):
         from .embedding import get_embedding_model

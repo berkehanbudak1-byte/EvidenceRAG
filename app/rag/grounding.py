@@ -64,3 +64,59 @@ def _normalize_number(number):
     if _DECIMAL.fullmatch(number):
         return number.replace(",", ".")
     return number
+
+
+def calculate_evidence_confidence(evidence, verification):
+    """Calculate an explicit evidence density and citation coverage confidence score.
+
+    Combines citation coverage ratio, average retrieval score of cited sources,
+    and penalties for invalid citations or unsupported numbers.
+    """
+    if not evidence or not verification:
+        return {
+            "confidence_score": 0.0,
+            "citation_coverage_ratio": 0.0,
+            "cited_source_count": 0,
+            "total_source_count": len(evidence) if evidence else 0,
+            "grade": "INSUFFICIENT",
+        }
+
+    total_sources = len(evidence)
+    valid_citations = verification.get("citations", [])
+    invalid_citations = verification.get("invalid_citations", [])
+    unsupported_numbers = verification.get("unsupported_numbers", [])
+
+    cited_count = len(valid_citations)
+    coverage_ratio = round(cited_count / total_sources, 4) if total_sources > 0 else 0.0
+
+    cited_scores = [
+        float(evidence[idx - 1].get("score", 0.75))
+        for idx in valid_citations
+        if 1 <= idx <= total_sources and evidence[idx - 1].get("score") is not None
+    ]
+    avg_retrieval_score = (
+        sum(cited_scores) / len(cited_scores)
+        if cited_scores
+        else (0.75 if cited_count > 0 else 0.0)
+    )
+
+    base_score = (0.55 * min(1.0, avg_retrieval_score)) + (0.45 * min(1.0, coverage_ratio * 1.25))
+    penalty = (0.2 * len(invalid_citations)) + (0.15 * len(unsupported_numbers))
+    final_score = round(max(0.0, min(1.0, base_score - penalty)), 4) if cited_count > 0 else 0.0
+
+    if final_score >= 0.75 and not invalid_citations and not unsupported_numbers:
+        grade = "HIGH"
+    elif final_score >= 0.45:
+        grade = "MODERATE"
+    elif final_score > 0.0:
+        grade = "LOW"
+    else:
+        grade = "UNVERIFIED"
+
+    return {
+        "confidence_score": final_score,
+        "citation_coverage_ratio": coverage_ratio,
+        "cited_source_count": cited_count,
+        "total_source_count": total_sources,
+        "grade": grade,
+    }
