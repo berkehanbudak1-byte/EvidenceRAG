@@ -17,7 +17,14 @@ from pydantic_core import PydanticCustomError
 load_dotenv()
 
 from app.rag.config import InputLimitError, Settings
-from app.access import LocalAccessMiddleware
+from app.access import AccessMiddleware
+from app.demo import (
+    demo_embed,
+    demo_generate,
+    mark_sample_payload,
+    resolve_demo_mode,
+    seed_sample_corpus,
+)
 from app.request_limits import BodyLimitMiddleware, bounded_upload
 from app.rag.document_loader import DocumentError
 from app.rag.generation import LLMGenerationError
@@ -34,6 +41,7 @@ logger = logging.getLogger(__name__)
 project_directory = Path(__file__).parent
 settings = Settings()
 _service_lease = None
+_demo_active = resolve_demo_mode(settings)
 
 
 def _require_writer_lease():
@@ -42,17 +50,45 @@ def _require_writer_lease():
     _service_lease.require_held()
 
 
-rag_pipeline = RAGPipeline(
-    settings=settings,
-    vector_store=VectorStore(
-        persist_path=project_directory / settings.index_dir / "store.npz",
-        signature=settings.embedding_signature(),
-        max_chunks=settings.max_store_chunks,
-        max_text_bytes=settings.max_store_text_bytes,
+def _build_pipeline(active_settings, demo_active):
+    if demo_active:
+        from dataclasses import replace
+        # Hash embeddings score lower than real E5; keep retrieval usable for preview.
+        active_settings = replace(
+            active_settings,
+            relevance_threshold=min(active_settings.relevance_threshold, 0.12),
+            hybrid_search=True,
+            reranker_model_name="",
+            ocr_languages="",
+        )
+        demo_dir = project_directory / active_settings.index_dir / "demo"
+        demo_dir.mkdir(parents=True, exist_ok=True)
+        store = VectorStore(
+            persist_path=demo_dir / "store.npz",
+            signature=active_settings.embedding_signature(),
+            max_chunks=active_settings.max_store_chunks,
+            max_text_bytes=active_settings.max_store_text_bytes,
+            write_guard=_require_writer_lease,
+            autoload=False,
+        )
+        return RAGPipeline(
+            settings=active_settings,
+            vector_store=store,
+            embedding_function=demo_embed,
+            generation_function=demo_generate,
+        )
+    store = VectorStore(
+        persist_path=project_directory / active_settings.index_dir / "store.npz",
+        signature=active_settings.embedding_signature(),
+        max_chunks=active_settings.max_store_chunks,
+        max_text_bytes=active_settings.max_store_text_bytes,
         write_guard=_require_writer_lease,
         autoload=False,  # Service reads the latest commit only after owning the lease.
-    ),
-)
+    )
+    return RAGPipeline(settings=active_settings, vector_store=store)
+
+
+rag_pipeline = _build_pipeline(settings, _demo_active)
 
 @asynccontextmanager
 async def lifespan(app):
@@ -63,12 +99,17 @@ async def lifespan(app):
     if lease is not None: store.write_guard = lease.require_held
     runtime = rag_pipeline.runtime
     app.state.service_accepting = False
-    app.state.model_readiness = "lazy"
+    app.state.model_readiness = "demo" if _demo_active else "lazy"
+    app.state.demo_mode = _demo_active
     try:
         runtime.restart()
         if lease is not None:
             store.reload()
-        if rag_pipeline.settings.preload_models:
+        if _demo_active:
+            await runtime.run_async("index", seed_sample_corpus, rag_pipeline, project_directory)
+            app.state.model_readiness = "demo"
+            logger.info("Demo mode active: sample corpus answers are labeled sample data")
+        elif rag_pipeline.settings.preload_models:
             app.state.model_readiness = "loading"
             try:
                 await runtime.run_async("load", rag_pipeline.preload_models)
@@ -90,11 +131,12 @@ async def lifespan(app):
 
 
 app = FastAPI(title="EvidenceRAG", lifespan=lifespan)
-app.state.model_readiness = "lazy"
+app.state.model_readiness = "demo" if _demo_active else "lazy"
 app.state.service_accepting = False
+app.state.demo_mode = _demo_active
 app.add_middleware(BodyLimitMiddleware, settings=lambda: rag_pipeline.settings)
 app.add_middleware(DiagnosticsMiddleware, pipeline=lambda: rag_pipeline)
-app.add_middleware(LocalAccessMiddleware)  # Outermost: reject before diagnostics/body parsing.
+app.add_middleware(AccessMiddleware, settings=lambda: rag_pipeline.settings)  # Outermost.
 static_directory = project_directory / "static"
 app.mount("/static", StaticFiles(directory=static_directory), name="static")
 
@@ -122,6 +164,9 @@ def health_check():
         "indexed_chunks": len(rag_pipeline.vector_store.chunks),
         "model_readiness": app.state.model_readiness,
         "store_operation_id": rag_pipeline.vector_store.operation_id,
+        "access_profile": rag_pipeline.settings.access_profile,
+        "demo_mode": bool(getattr(app.state, "demo_mode", False)),
+        "sample_data": bool(getattr(app.state, "demo_mode", False)),
     }
 
 
@@ -212,7 +257,10 @@ async def delete_document(document_id: str):
 async def ask_question(request: QuestionRequest):
     _require_service_accepting()
     try:
-        return await rag_pipeline.runtime.run_async("ask", rag_pipeline.ask, request.question)
+        result = await rag_pipeline.runtime.run_async("ask", rag_pipeline.ask, request.question)
+        if getattr(app.state, "demo_mode", False):
+            return mark_sample_payload(result)
+        return result
     except BusyError as exc:
         raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "1"}) from exc
     except InputLimitError as exc:

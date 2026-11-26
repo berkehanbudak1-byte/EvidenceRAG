@@ -5,6 +5,8 @@ from functools import lru_cache
 from pathlib import Path
 from dataclasses import dataclass, field
 
+from app.access import normalize_profile, parse_public_hosts
+
 
 class InputLimitError(ValueError):
     """An explicit input or store budget was exceeded (not a server failure)."""
@@ -78,9 +80,27 @@ def _bool_env(name):
 
 # Environment variables are read when Settings() is created, not when this module is
 # imported, so values loaded from a .env file at startup are picked up.
+def _demo_env():
+    """Tri-state demo flag: unset/false off; true on; auto when heavy model deps are missing."""
+    value = os.getenv("EVIDENCERAG_DEMO")
+    if value is None or value.strip() == "":
+        return False
+    lowered = value.strip().lower()
+    if lowered == "auto":
+        return None
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("EVIDENCERAG_DEMO must be true/false/auto")
+
+
 @dataclass(frozen=True)
 class Settings:
     access_profile: str = field(default_factory=_str_env("ACCESS_PROFILE", "local"))
+    api_key: str | None = field(default_factory=_str_env("EVIDENCERAG_API_KEY", None))
+    public_hosts: tuple = field(default_factory=lambda: parse_public_hosts(os.getenv("EVIDENCERAG_PUBLIC_HOST")))
+    demo_mode: bool | None = field(default_factory=_demo_env)
     embedding_model_name: str = field(
         default_factory=_str_env("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-small")
     )
@@ -145,8 +165,23 @@ class Settings:
     def __post_init__(self):
         if self.reranker_model_name and not re.fullmatch(r"[0-9a-f]{40}", self.reranker_model_revision or ""):
             raise ValueError("RERANKER_MODEL_REVISION must be an immutable 40-character commit SHA")
-        if self.access_profile != "local":
-            raise ValueError("ACCESS_PROFILE supports only 'local'; shared/public access is not supported")
+        profile = normalize_profile(self.access_profile)
+        object.__setattr__(self, "access_profile", profile)
+        hosts = parse_public_hosts(self.public_hosts)
+        object.__setattr__(self, "public_hosts", hosts)
+        if profile == "local":
+            pass
+        elif profile == "hosted":
+            if not (self.api_key and self.api_key.strip()):
+                raise ValueError("ACCESS_PROFILE=hosted requires EVIDENCERAG_API_KEY")
+            if not hosts:
+                raise ValueError("ACCESS_PROFILE=hosted requires EVIDENCERAG_PUBLIC_HOST")
+            object.__setattr__(self, "api_key", self.api_key.strip())
+        else:
+            raise ValueError(
+                "ACCESS_PROFILE supports 'local' or 'hosted' (alias 'cloud'); "
+                "shared/public access is not supported"
+            )
         for kind,name_field,revision_field in [
             ("embedding","embedding_model_name","embedding_model_revision"),
             ("llm","llm_model_name","llm_model_revision"),
