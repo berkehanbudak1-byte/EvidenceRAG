@@ -1,0 +1,110 @@
+"""Security hardening tests for DPAPI vault, per-IP auth rate limiting, and strict SHA-256 CSP."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+from pathlib import Path
+from types import SimpleNamespace
+import unittest
+
+from app.access import (
+    AccessMiddleware,
+    AuthFailureRateLimiter,
+    DEFAULT_STRICT_CSP,
+    access_denial,
+    build_strict_csp,
+)
+from app.dpapi_vault import DPAPI_PREFIX, seal_secret, unseal_secret
+
+
+class TestEvidenceRagSecurityHardening(unittest.TestCase):
+    def test_dpapi_seal_and_unseal_roundtrip(self) -> None:
+        def fake_runner(action: str, b64_in: str) -> str:
+            if action == "protect":
+                return base64.b64encode(f"S:{b64_in}".encode("utf-8")).decode("ascii")
+            decoded = base64.b64decode(b64_in).decode("utf-8")
+            self.assertTrue(decoded.startswith("S:"))
+            return decoded[2:]
+
+        sealed = seal_secret("erag-secret-token", runner=fake_runner)
+        self.assertTrue(sealed.startswith(DPAPI_PREFIX))
+        self.assertNotIn("erag-secret-token", sealed)
+        self.assertEqual(unseal_secret(sealed, runner=fake_runner), "erag-secret-token")
+
+    def test_hosted_api_key_auth_enforces_per_ip_rate_limit(self) -> None:
+        settings = SimpleNamespace(
+            access_profile="hosted",
+            public_hosts=("rag.example.com",),
+            api_key="correct-secret-key",
+        )
+        limiter = AuthFailureRateLimiter(max_failures=3, window_seconds=60.0)
+        bad_scope = {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/ask",
+            "headers": [(b"host", b"rag.example.com"), (b"x-api-key", b"wrong")],
+            "client": ("203.0.113.10", 44321),
+        }
+        for _ in range(3):
+            denied = access_denial(bad_scope, settings, rate_limiter=limiter)
+            self.assertEqual(denied[0], 401)
+
+        # 4th attempt is blocked with 429 even if attacker now guesses the right key
+        good_from_blocked_ip = {
+            **bad_scope,
+            "headers": [(b"host", b"rag.example.com"), (b"x-api-key", b"correct-secret-key")],
+        }
+        self.assertEqual(access_denial(good_from_blocked_ip, settings, rate_limiter=limiter)[0], 429)
+
+        # Different IP still succeeds with valid key
+        other_ip = {**good_from_blocked_ip, "client": ("203.0.113.11", 44322)}
+        self.assertIsNone(access_denial(other_ip, settings, rate_limiter=limiter))
+
+    def test_strict_csp_has_no_unsafe_inline_and_middleware_attaches_headers(self) -> None:
+        self.assertIn("script-src 'self'", DEFAULT_STRICT_CSP)
+        self.assertNotIn("unsafe-inline", DEFAULT_STRICT_CSP)
+        self.assertIn("object-src 'none'", DEFAULT_STRICT_CSP)
+        self.assertIn("frame-ancestors 'none'", DEFAULT_STRICT_CSP)
+
+        # Verify dynamic sha256 computation when an inline script exists
+        tmp_html = Path("/tmp/test_erag_csp.html")
+        tmp_html.write_text("<html><script>console.log(42);</script></html>", encoding="utf-8")
+        try:
+            csp = build_strict_csp(tmp_html)
+            self.assertIn("'sha256-", csp)
+            self.assertNotIn("unsafe-inline", csp)
+        finally:
+            tmp_html.unlink(missing_ok=True)
+
+        # Verify AccessMiddleware injects headers on valid local GET
+        async def dummy_app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        sent: list[dict] = []
+
+        async def collect(msg):
+            sent.append(msg)
+
+        async def noop_receive():
+            return {"type": "http.request", "body": b""}
+
+        local_scope = {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/",
+            "headers": [(b"host", b"127.0.0.1:8000")],
+            "client": ("127.0.0.1", 50000),
+        }
+        asyncio.run(AccessMiddleware(dummy_app)(local_scope, noop_receive, collect))
+        resp_headers = {k.lower(): v for k, v in sent[0]["headers"]}
+        self.assertEqual(resp_headers[b"x-content-type-options"], b"nosniff")
+        self.assertEqual(resp_headers[b"x-frame-options"], b"DENY")
+        self.assertIn(b"script-src 'self'", resp_headers[b"content-security-policy"])
+
+
+if __name__ == "__main__":
+    unittest.main()
