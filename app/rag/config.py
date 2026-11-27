@@ -248,6 +248,13 @@ class Settings:
         object.__setattr__(self, "access_profile", profile)
         hosts = parse_public_hosts(self.public_hosts)
         object.__setattr__(self, "public_hosts", hosts)
+        from app.dpapi_vault import unseal_secret
+
+        if self.api_key:
+            object.__setattr__(self, "api_key", unseal_secret(self.api_key))
+        if self.xai_api_key:
+            object.__setattr__(self, "xai_api_key", unseal_secret(self.xai_api_key))
+
         if profile == "local":
             pass
         elif profile == "hosted":
