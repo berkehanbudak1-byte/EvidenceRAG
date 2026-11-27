@@ -33,6 +33,7 @@ from app.rag.vector_store import DuplicateDocumentError, VectorStore, StoreWrite
 from app.rag.runtime import BusyError
 from app.rag.storage_lease import WriterLease, WriterLeaseError, drain_service
 from app.rag.diagnostics import DiagnosticsMiddleware, mark_reason
+from app.rag.swarm import get_swarm_policy
 
 
 logging.basicConfig(level=logging.INFO)
@@ -167,6 +168,15 @@ def health_check():
         "access_profile": rag_pipeline.settings.access_profile,
         "demo_mode": bool(getattr(app.state, "demo_mode", False)),
         "sample_data": bool(getattr(app.state, "demo_mode", False)),
+    }
+
+
+@app.get("/swarm/policy")
+def swarm_policy():
+    policy = get_swarm_policy()
+    return {
+        **policy,
+        "active_provider": rag_pipeline.settings.llm_provider,
     }
 
 
