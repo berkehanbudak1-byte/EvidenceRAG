@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: evidencerag
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ACCESS_PROFILE
+        value: hosted
+      - key: LLM_PROVIDER
+        value: xai
+      - key: XAI_MODEL_NAME
+        value: grok-3-mini
+      - key: PRELOAD_MODELS
+        value: "false"
+      - key: EVIDENCERAG_DEMO
+        value: "false"
+      - key: EVIDENCERAG_PUBLIC_HOST
+        sync: false
+      - key: EVIDENCERAG_API_KEY
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
