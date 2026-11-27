@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from pathlib import Path
+import re
+import tempfile
 from types import SimpleNamespace
 import unittest
 
@@ -65,18 +68,24 @@ class TestEvidenceRagSecurityHardening(unittest.TestCase):
     def test_strict_csp_has_no_unsafe_inline_and_middleware_attaches_headers(self) -> None:
         self.assertIn("script-src 'self'", DEFAULT_STRICT_CSP)
         self.assertNotIn("unsafe-inline", DEFAULT_STRICT_CSP)
+        self.assertNotIn("unsafe-eval", DEFAULT_STRICT_CSP)
         self.assertIn("object-src 'none'", DEFAULT_STRICT_CSP)
         self.assertIn("frame-ancestors 'none'", DEFAULT_STRICT_CSP)
 
-        # Verify dynamic sha256 computation when an inline script exists
-        tmp_html = Path("/tmp/test_erag_csp.html")
-        tmp_html.write_text("<html><script>console.log(42);</script></html>", encoding="utf-8")
-        try:
+        # Verify shipped static/index.html has zero inline script/style bodies
+        index_html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+        for attrs, body in re.findall(r"<script\b([^>]*)>([\s\S]*?)</script\s*>", index_html, re.I):
+            self.assertRegex(attrs, r"\bsrc\s*=", "All script tags in static/index.html must be external")
+            self.assertEqual(body.strip(), "")
+        self.assertNotRegex(index_html, r"<style\b", "static/index.html must not contain inline style blocks")
+
+        # Verify dynamic sha256 computation when an inline script exists (cross-platform tmpdir)
+        with tempfile.TemporaryDirectory(prefix="erag-csp-") as tmp_dir:
+            tmp_html = Path(tmp_dir) / "sample.html"
+            tmp_html.write_text("<html><script>console.log(42);</script></html>", encoding="utf-8")
             csp = build_strict_csp(tmp_html)
             self.assertIn("'sha256-", csp)
             self.assertNotIn("unsafe-inline", csp)
-        finally:
-            tmp_html.unlink(missing_ok=True)
 
         # Verify AccessMiddleware injects headers on valid local GET
         async def dummy_app(scope, receive, send):
@@ -104,6 +113,54 @@ class TestEvidenceRagSecurityHardening(unittest.TestCase):
         self.assertEqual(resp_headers[b"x-content-type-options"], b"nosniff")
         self.assertEqual(resp_headers[b"x-frame-options"], b"DENY")
         self.assertIn(b"script-src 'self'", resp_headers[b"content-security-policy"])
+
+    def test_middleware_denial_attaches_security_headers_and_retry_after(self) -> None:
+        settings = SimpleNamespace(
+            access_profile="hosted",
+            public_hosts=("rag.example.com",),
+            api_key="correct-secret-key",
+        )
+        limiter = AuthFailureRateLimiter(max_failures=1, window_seconds=45.0)
+
+        async def unreachable_app(scope, receive, send):
+            raise AssertionError("Downstream app must not run on access denial")
+
+        async def noop_receive():
+            return {"type": "http.request", "body": b""}
+
+        middleware = AccessMiddleware(unreachable_app, settings=settings, rate_limiter=limiter)
+        bad_scope = {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/ask",
+            "headers": [(b"host", b"rag.example.com"), (b"x-api-key", b"wrong")],
+            "client": ("203.0.113.55", 51234),
+        }
+
+        sent_401: list[dict] = []
+
+        async def collect_401(msg):
+            sent_401.append(msg)
+
+        asyncio.run(middleware(bad_scope, noop_receive, collect_401))
+        self.assertEqual(sent_401[0]["status"], 401)
+        headers_401 = {k.lower(): v for k, v in sent_401[0]["headers"]}
+        self.assertEqual(headers_401[b"x-content-type-options"], b"nosniff")
+        self.assertEqual(headers_401[b"x-frame-options"], b"DENY")
+        self.assertEqual(headers_401[b"referrer-policy"], b"no-referrer")
+        self.assertEqual(json.loads(sent_401[1]["body"].decode("utf-8"))["detail"], "API key required")
+
+        sent_429: list[dict] = []
+
+        async def collect_429(msg):
+            sent_429.append(msg)
+
+        asyncio.run(middleware(bad_scope, noop_receive, collect_429))
+        self.assertEqual(sent_429[0]["status"], 429)
+        headers_429 = {k.lower(): v for k, v in sent_429[0]["headers"]}
+        self.assertEqual(headers_429[b"x-content-type-options"], b"nosniff")
+        self.assertEqual(headers_429[b"retry-after"], b"45")
 
 
 if __name__ == "__main__":

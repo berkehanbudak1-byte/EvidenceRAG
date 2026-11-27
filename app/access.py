@@ -4,6 +4,7 @@ from collections import deque
 import hashlib
 import hmac
 import ipaddress
+import json
 from pathlib import Path
 import re
 import time
@@ -76,7 +77,7 @@ def build_strict_csp(html_path: str | Path | None = None) -> str:
     if html_path is not None:
         p = Path(html_path)
         if p.is_file():
-            text = p.read_text(encoding="utf-8").replace("\r\n", "\n")
+            text = p.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
             for attrs, body in re.findall(r"<script\b([^>]*)>([\s\S]*?)</script\s*>", text, re.I):
                 if re.search(r"\bsrc\s*=", attrs or "", re.I):
                     continue
@@ -279,6 +280,23 @@ def access_denial(scope, settings=None, rate_limiter=None):
     return None
 
 
+async def _send_json_denial(scope, receive, send, status: int, detail: str, extra_headers=()):
+    denial_headers = list(BASE_SECURITY_HEADERS) + list(extra_headers)
+    if JSONResponse is not None:
+        header_map = {k.decode("ascii"): v.decode("ascii") for k, v in denial_headers}
+        return await JSONResponse({"detail": detail}, status_code=status, headers=header_map)(
+            scope, receive, send
+        )
+    body = json.dumps({"detail": detail}).encode("utf-8")
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode("ascii")),
+        *denial_headers,
+    ]
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
 class AccessMiddleware:
     """ASGI middleware: reject before diagnostics/body parsing and apply strict security headers."""
 
@@ -298,7 +316,13 @@ class AccessMiddleware:
             denied = access_denial(scope, self._resolve_settings(), rate_limiter=self._rate_limiter)
             if denied:
                 status, detail = denied
-                return await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
+                extra_headers = ()
+                if status == 429:
+                    retry_after = str(max(1, int(self._rate_limiter.window_seconds))).encode("ascii")
+                    extra_headers = ((b"retry-after", retry_after),)
+                return await _send_json_denial(
+                    scope, receive, send, status, detail, extra_headers=extra_headers
+                )
 
             path = scope.get("path", "")
             include_csp = path not in DOCS_PATHS
