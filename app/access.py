@@ -20,7 +20,7 @@ PROXY_HEADERS = {b"forwarded", b"x-forwarded-for", b"x-forwarded-host", b"x-forw
                  b"x-forwarded-port", b"x-real-ip"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 API_KEY_HEADER = b"x-api-key"
-PROTECTED_MUTATION_PREFIXES = ("/ask", "/documents")
+PROTECTED_MUTATION_PREFIXES = ("/ask", "/documents", "/swarm")
 DOCS_PATHS = {"/docs", "/redoc"}
 
 
