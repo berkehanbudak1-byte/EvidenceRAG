@@ -113,3 +113,37 @@ def test_llm_only_revision_does_not_change_index_identity():
     changed=replace(original,llm_model_revision="b"*40)
     assert original.embedding_signature()==changed.embedding_signature()
     assert original.model_identity()!=changed.model_identity()
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, "auto"),
+    ("", "auto"),
+    ("auto", "auto"),
+    ("AUTO", "auto"),
+    ("  bfloat16  ", "bfloat16"),
+    ("Float32", "float32"),
+    ("float16", "float16"),
+])
+def test_llm_torch_dtype_env_and_normalization(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("LLM_TORCH_DTYPE", raising=False)
+    else:
+        monkeypatch.setenv("LLM_TORCH_DTYPE", raw)
+    settings = Settings()
+    assert settings.llm_torch_dtype == expected
+    assert settings.model_identity()["llm"]["torch_dtype"] == expected
+
+
+@pytest.mark.parametrize("bad_value", ["bf16", "fp16", "int8", "float64", 16, True])
+def test_invalid_llm_torch_dtype_is_rejected(bad_value):
+    with pytest.raises(ValueError, match="LLM_TORCH_DTYPE"):
+        Settings(llm_torch_dtype=bad_value)
+
+
+def test_llm_torch_dtype_changes_model_identity_not_embedding_signature():
+    from dataclasses import replace
+    original = Settings(llm_torch_dtype="auto")
+    changed = replace(original, llm_torch_dtype="bfloat16")
+    assert original.embedding_signature() == changed.embedding_signature()
+    assert original.model_identity() != changed.model_identity()
+    assert changed.model_identity()["llm"]["torch_dtype"] == "bfloat16"

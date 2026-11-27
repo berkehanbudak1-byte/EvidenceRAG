@@ -7,10 +7,12 @@ import urllib.request
 
 from .config import (
     InputLimitError,
+    Settings,
     XAI_DEFAULT_API_URL,
     XAI_DEFAULT_MODEL,
     effective_revision,
     normalize_llm_provider,
+    normalize_llm_torch_dtype,
     validate_xai_api_url,
     validate_xai_model_name,
 )
@@ -56,21 +58,46 @@ def _default_xai_opener():
     return urllib.request.build_opener(_NoRedirectHandler())
 
 
-def get_text_generator(model_name, revision=None):
-    revision=effective_revision("llm",model_name,revision)
-    return get_runtime().run_sync("load", _cache.get, (model_name, revision),
-        lambda: _create_text_generator(model_name, revision))
+def _resolve_torch_dtype(torch_dtype, torch_module):
+    normalized = normalize_llm_torch_dtype(torch_dtype)
+    if normalized == "auto":
+        # Half-precision weights are several times slower on CPUs without native bf16 support.
+        return "auto" if torch_module.cuda.is_available() else torch_module.float32
+    return getattr(torch_module, normalized)
 
 
-def _create_text_generator(model_name, revision):
+def get_text_generator(model_name, revision=None, torch_dtype=None):
+    revision = effective_revision("llm", model_name, revision)
+    resolved_dtype = normalize_llm_torch_dtype(
+        torch_dtype if torch_dtype is not None else Settings().llm_torch_dtype
+    )
+    cache_key = (model_name, revision, resolved_dtype)
+    factory = (
+        (lambda: _create_text_generator(model_name, revision))
+        if torch_dtype is None
+        else (lambda: _create_text_generator(model_name, revision, torch_dtype=resolved_dtype))
+    )
+    return get_runtime().run_sync("load", _cache.get, cache_key, factory)
+
+
+def _create_text_generator(model_name, revision, torch_dtype=None):
     import torch
     from transformers import pipeline, AutoTokenizer
     configure_torch_threads(torch)
 
-    # Half-precision weights are several times slower on CPUs without native bf16 support.
-    dtype = "auto" if torch.cuda.is_available() else torch.float32
-    tokenizer=AutoTokenizer.from_pretrained(model_name,revision=revision)
-    generator = pipeline("text-generation", model=model_name, tokenizer=tokenizer,dtype=dtype,revision=revision)
+    resolved_dtype = normalize_llm_torch_dtype(
+        torch_dtype if torch_dtype is not None else Settings().llm_torch_dtype
+    )
+    dtype = _resolve_torch_dtype(resolved_dtype, torch)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, revision=revision)
+    generator = pipeline(
+        "text-generation",
+        model=model_name,
+        tokenizer=tokenizer,
+        dtype=dtype,
+        revision=revision,
+        model_kwargs={"low_cpu_mem_usage": True},
+    )
     # Answers should be reproducible, so drop the model's default sampling settings
     # instead of overriding them per call (which makes transformers warn on every request).
     defaults = generator.model.generation_config
@@ -222,12 +249,14 @@ def generate_answer(
     revision=None,
     *,
     provider="local",
+    torch_dtype=None,
     api_key=None,
     api_url=XAI_DEFAULT_API_URL,
     timeout_seconds=60,
     opener=None,
 ):
     resolved_provider = normalize_llm_provider(provider)
+    resolved_torch_dtype = normalize_llm_torch_dtype(torch_dtype) if torch_dtype is not None else None
     if text_generator is None and resolved_provider == "xai":
         resolved_model = model_name or XAI_DEFAULT_MODEL
         return get_runtime().run_sync(
@@ -250,12 +279,17 @@ def generate_answer(
         max_new_tokens,
         text_generator,
         revision,
+        resolved_torch_dtype,
     )
 
 
-def _generate_answer(messages, model_name, max_new_tokens, text_generator, revision):
+def _generate_answer(messages, model_name, max_new_tokens, text_generator, revision, torch_dtype=None):
     try:
-        generator = text_generator if text_generator is not None else get_text_generator(model_name,revision=revision)
+        generator = (
+            text_generator
+            if text_generator is not None
+            else get_text_generator(model_name, revision=revision, torch_dtype=torch_dtype)
+        )
         tokenizer = getattr(generator, "tokenizer", None)
         if tokenizer is None:
             raise LLMGenerationError("Tokenizer is required for the complete prompt budget")

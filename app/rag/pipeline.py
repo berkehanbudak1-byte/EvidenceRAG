@@ -48,7 +48,11 @@ class RAGPipeline:
                     timeout_seconds=self.settings.xai_timeout_seconds,
                 )
             else:
-                self.generation_function = partial(generate_answer, revision=self.settings.llm_model_revision)
+                self.generation_function = partial(
+                    generate_answer,
+                    revision=self.settings.llm_model_revision,
+                    torch_dtype=self.settings.llm_torch_dtype,
+                )
         else:
             self.generation_function = generation_function
         self.runtime = runtime or get_runtime()
@@ -206,7 +210,11 @@ class RAGPipeline:
         from .generation import get_text_generator
         get_embedding_model(self.settings.embedding_model_name,revision=self.settings.embedding_model_revision)
         if self.settings.llm_provider == "local":
-            get_text_generator(self.settings.llm_model_name,revision=self.settings.llm_model_revision)
+            get_text_generator(
+                self.settings.llm_model_name,
+                revision=self.settings.llm_model_revision,
+                torch_dtype=self.settings.llm_torch_dtype,
+            )
 
 
 def _insufficient_evidence():

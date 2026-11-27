@@ -1,0 +1,341 @@
+{
+  "schema_version": 2,
+  "created_at": "2026-11-27T22:00:42.279740+00:00",
+  "scope": "stratified_3q_cpu_sample",
+  "companion_retrieval_baseline": "eval-history/2026-11-27-real-model-retrieval-baseline.json",
+  "source_dataset": "experiments/eval/dataset.json",
+  "selected_question_ids": [
+    "yv-su-kaybi",
+    "en-otobus",
+    "tuzak-baskan"
+  ],
+  "execution_kind": "real_model",
+  "mode": "evaluation",
+  "status": "completed",
+  "data_gate": "source_labels_valid",
+  "quality_promotion_gate": "not_evaluated",
+  "model_resistance": "unmeasured",
+  "metric_scope": "stratified_3q_cpu_sample",
+  "preflight_questions": 3,
+  "split_counts": {
+    "legacy_regression": 3,
+    "calibration": 0,
+    "holdout": 0
+  },
+  "fingerprint": "7cfddbe423bba69401941c6d974cf0ca46d68185bbf0b76081f2544f5a5fed9a",
+  "tuning_fingerprint": "874094f71ba7357ed44a13d6774e9d5137dc90d352cd5dbf9fbbe5a0d82b4864",
+  "oracle_errors": {},
+  "index_errors": [],
+  "identity": {
+    "dataset_sha256": "f0efc76a206eed947fa65451ebe0e6e24d12511d54a454864393f098ace9a02a",
+    "corpus": {
+      "izin_yonergesi.md": {
+        "source_sha256": "ce5d0b495dc4ef94a5800ddd289dd758924b578ce9c4290d5c80e354f4e32baa",
+        "file_sha256": "ce5d0b495dc4ef94a5800ddd289dd758924b578ce9c4290d5c80e354f4e32baa"
+      },
+      "mavi_korfez_2025.md": {
+        "source_sha256": "b9c421cb3c807951f9c4952c52c37a2a12ad46213f0e38909ea7d7a46571d10f",
+        "file_sha256": "b9c421cb3c807951f9c4952c52c37a2a12ad46213f0e38909ea7d7a46571d10f"
+      },
+      "ornek_rapor.md": {
+        "source_sha256": "ec7c6956e7b80bbfb0e39bccfa527cffd699ac11acf61b6ab2c7130526c81c68",
+        "file_sha256": "ec7c6956e7b80bbfb0e39bccfa527cffd699ac11acf61b6ab2c7130526c81c68"
+      }
+    },
+    "qrels_sha256": "132215f9e032e8beed93815a246c7ef1b9e83dca06cc803578a364f39114b727",
+    "evaluator_source_sha256": "94715ef25aff2485fb7a39b6dbdbd860bf53a9b971401bde0c0e9c3882c31a7d",
+    "diagnostics_identity": {
+      "source_sha256": "70287601c625b51faa347969384b040c22b87b2d7e79225397fc79c93a61ba3d",
+      "prompt_sha256": "3232772a4e8794bc4eec4b413986ed020062f430c12d4694fbaca576fc3cf4cc",
+      "runtime": {
+        "numpy": "2.5.5",
+        "faiss-cpu": "1.16.0",
+        "transformers": "5.17.0",
+        "sentence-transformers": "6.1.0",
+        "fastapi": "0.165.0"
+      },
+      "retrieval": {
+        "hybrid": true,
+        "candidates": 30,
+        "keyword_weight": 0.5,
+        "reranker": "",
+        "reranker_revision": null,
+        "rerank_candidates": 20
+      },
+      "embedding": {
+        "repository": "intfloat/multilingual-e5-small",
+        "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "tokenizer_repository": "intfloat/multilingual-e5-small",
+        "tokenizer_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+      },
+      "llm": {
+        "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+        "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+        "tokenizer_repository": "Qwen/Qwen2.5-1.5B-Instruct",
+        "tokenizer_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+        "torch_dtype": "bfloat16"
+      },
+      "index_signature": {
+        "schema_version": 2,
+        "embedding_model_name": "intfloat/multilingual-e5-small",
+        "embedding_model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "tokenizer": {
+          "repository": "intfloat/multilingual-e5-small",
+          "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+        },
+        "embedding_query_prefix": "query: ",
+        "embedding_passage_prefix": "passage: ",
+        "normalization": "l2",
+        "embedding_dimension": 384,
+        "preprocessing_version": 2,
+        "ocr_languages": "tr,en",
+        "ingestion": {
+          "strategy": "markdown_v1",
+          "version": 1,
+          "chunk_size": 800,
+          "chunk_overlap": 100
+        }
+      },
+      "configured_index_signature": {
+        "schema_version": 2,
+        "embedding_model_name": "intfloat/multilingual-e5-small",
+        "embedding_model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "tokenizer": {
+          "repository": "intfloat/multilingual-e5-small",
+          "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+        },
+        "embedding_query_prefix": "query: ",
+        "embedding_passage_prefix": "passage: ",
+        "normalization": "l2",
+        "embedding_dimension": 384,
+        "preprocessing_version": 2,
+        "ocr_languages": "tr,en",
+        "ingestion": {
+          "strategy": "markdown_v1",
+          "version": 1,
+          "chunk_size": 800,
+          "chunk_overlap": 100
+        }
+      },
+      "index_operation_id": null,
+      "identity_sha256": "734ca0e24a952ce40f55b037a0eecc7541751dee423e8822e9401531deb32c5e"
+    },
+    "context_budget_chars": 16000,
+    "settings_summary": {
+      "llm_provider": "local",
+      "llm_model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+      "llm_model_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "llm_torch_dtype": "bfloat16",
+      "chunker_strategy": "markdown_v1",
+      "ingestion_version": 1,
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "top_k": 5,
+      "relevance_threshold": 0.8,
+      "hybrid_search": true,
+      "keyword_weight": 0.5,
+      "max_new_tokens": 256
+    },
+    "split_membership_count": 3
+  },
+  "index_observation": {
+    "effective_dimension": 384,
+    "chunks": 17,
+    "signature": {
+      "schema_version": 2,
+      "embedding_model_name": "intfloat/multilingual-e5-small",
+      "embedding_model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "tokenizer": {
+        "repository": "intfloat/multilingual-e5-small",
+        "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+      },
+      "embedding_query_prefix": "query: ",
+      "embedding_passage_prefix": "passage: ",
+      "normalization": "l2",
+      "embedding_dimension": 384,
+      "preprocessing_version": 2,
+      "ocr_languages": "tr,en",
+      "ingestion": {
+        "strategy": "markdown_v1",
+        "version": 1,
+        "chunk_size": 800,
+        "chunk_overlap": 100
+      }
+    }
+  },
+  "runtime_observation": {
+    "offline_cache_only": true,
+    "env": {
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "LLM_TORCH_DTYPE": "bfloat16"
+    },
+    "low_cpu_mem_usage": true,
+    "hardware": "2 vCPU Intel Xeon @ 2.30GHz (AVX2, no AVX-512 BF16, no GPU), 7.8 GiB RAM + 8.0 GiB swap",
+    "elapsed_seconds": 504.78,
+    "model_load_seconds": 2.28,
+    "memory_gib": {
+      "vm_hwm": 3.976,
+      "vm_rss": 3.872,
+      "vm_swap": 0.0
+    }
+  },
+  "retrieval": {
+    "answerable": {
+      "count": 1,
+      "hit_at_1": 1.0,
+      "hit_at_k": 1.0,
+      "group_mrr": 1.0,
+      "chunk_coverage_failures": 0,
+      "coverage_unverified": 0,
+      "gold_retained": 1.0
+    },
+    "answerable_english": {
+      "count": 1,
+      "hit_at_1": 1.0,
+      "hit_at_k": 1.0,
+      "group_mrr": 1.0,
+      "chunk_coverage_failures": 0,
+      "coverage_unverified": 0,
+      "gold_retained": 1.0
+    }
+  },
+  "answers": {
+    "answerable": {
+      "count": 1,
+      "lexical_match_rate": 1.0,
+      "end_to_end_lexical_with_coverage_rate": 1.0,
+      "refusals": 0,
+      "errors": 0,
+      "semantic_rubric_rated": 0
+    },
+    "answerable_english": {
+      "count": 1,
+      "lexical_match_rate": 1.0,
+      "end_to_end_lexical_with_coverage_rate": 1.0,
+      "refusals": 0,
+      "errors": 0,
+      "semantic_rubric_rated": 0
+    },
+    "unanswerable_related": {
+      "count": 1,
+      "lexical_match_rate": null,
+      "end_to_end_lexical_with_coverage_rate": 0.0,
+      "refusals": 0,
+      "errors": 0,
+      "semantic_rubric_rated": 0
+    },
+    "unanswerable_offtopic": {
+      "count": 0,
+      "lexical_match_rate": null,
+      "end_to_end_lexical_with_coverage_rate": null,
+      "refusals": 0,
+      "errors": 0,
+      "semantic_rubric_rated": 0
+    },
+    "uncategorized": {
+      "count": 0,
+      "lexical_match_rate": null,
+      "end_to_end_lexical_with_coverage_rate": null,
+      "refusals": 0,
+      "errors": 0,
+      "semantic_rubric_rated": 0
+    },
+    "generation_invocations": {
+      "count": 3,
+      "timed_count": 3,
+      "median_seconds": 172.24883565100026,
+      "errors": 0,
+      "model_refusals": 0
+    }
+  },
+  "sample_results": [
+    {
+      "id": "yv-su-kaybi",
+      "category": "answerable",
+      "split": "legacy_regression",
+      "rank": 1,
+      "top_score": 0.916691,
+      "accepted_evidence": true,
+      "gold_retained": true,
+      "status": "completed",
+      "lexical_match": true,
+      "refused": false,
+      "reason": "answered",
+      "generation_invoked": true,
+      "generation_seconds": 232.43,
+      "verification": {
+        "citations": [],
+        "invalid_citations": [],
+        "unsupported_numbers": [
+          "1"
+        ],
+        "question_only_numbers": []
+      },
+      "observed_behavior_note": "Correct Turkish numeric answer (22%); wrote bracketless \"Kanıt 1\" instead of \"[Kanıt 1]\", leaving verification.citations empty."
+    },
+    {
+      "id": "en-otobus",
+      "category": "answerable_english",
+      "split": "legacy_regression",
+      "rank": 1,
+      "top_score": 0.847204,
+      "accepted_evidence": true,
+      "gold_retained": true,
+      "status": "completed",
+      "lexical_match": true,
+      "refused": false,
+      "reason": "answered",
+      "generation_invoked": true,
+      "generation_seconds": 84.63,
+      "verification": {
+        "citations": [],
+        "invalid_citations": [],
+        "unsupported_numbers": [
+          "1"
+        ],
+        "question_only_numbers": []
+      },
+      "observed_behavior_note": "Correct cross-lingual English answer (14 electric buses) from Turkish source; wrote bracketless \"Kanıt 1\", leaving verification.citations empty."
+    },
+    {
+      "id": "tuzak-baskan",
+      "category": "unanswerable_related",
+      "split": "legacy_regression",
+      "rank": null,
+      "top_score": 0.824131,
+      "accepted_evidence": true,
+      "gold_retained": null,
+      "status": "completed",
+      "lexical_match": null,
+      "refused": false,
+      "reason": "answered",
+      "generation_invoked": true,
+      "generation_seconds": 172.25,
+      "verification": {
+        "citations": [],
+        "invalid_citations": [],
+        "unsupported_numbers": [],
+        "question_only_numbers": []
+      },
+      "observed_behavior_note": "Model semantically refused and appended standalone \"NO_EVIDENCE\" after a two-sentence English explanation; app/rag/pipeline.py exact-equality check (answer.strip().casefold() == NO_EVIDENCE_MARKER.casefold()) therefore classified reason=answered and refused=false (0/1 programmatic refusal)."
+    }
+  ],
+  "real_model_findings": [
+    "LLM_TORCH_DTYPE=bfloat16 with low_cpu_mem_usage=True loaded Qwen/Qwen2.5-1.5B-Instruct in 2.28s at 3.98 GiB peak RSS and 0.0 GiB swap (vs 4.1 GiB swap spill in float32).",
+    "Answerable accuracy on the stratified sample was 2/2 (100% retrieval hit@1, 100% lexical match across Turkish and cross-lingual English queries).",
+    "Refusal detection gap observed on unanswerable_related (tuzak-baskan): Qwen2.5-1.5B-Instruct refused semantically and emitted a standalone trailing NO_EVIDENCE line after an explanatory sentence, which missed the exact full-string check in app/rag/pipeline.py (refused=false, model_refusals=0/1).",
+    "Citation format gap observed on Qwen2.5-1.5B-Instruct: both answerable replies referenced \"Kanıt 1\" without square brackets \"[Kanıt 1]\", resulting in empty verification.citations and \"1\" flagged in unsupported_numbers."
+  ],
+  "promotion_to_13_requirements": {
+    "status": "not_evaluated",
+    "why_not_promoted": "Stratified 3-question sample is from legacy_regression (no independent calibration/holdout split, no human semantic rubric annotations, and full 41-question --llm run requires GPU/AVX-512 host).",
+    "commands": {
+      "full_legacy_llm_baseline_gpu": "HF_HUB_OFFLINE=1 LLM_TORCH_DTYPE=auto python experiments/evaluate.py --dataset experiments/eval/dataset.json --llm --output experiments/results/full-legacy-llm.json",
+      "full_legacy_llm_baseline_low_ram_cpu": "HF_HUB_OFFLINE=1 LLM_TORCH_DTYPE=bfloat16 python experiments/evaluate.py --dataset experiments/eval/dataset.json --llm --output experiments/results/full-legacy-llm-bf16.json",
+      "holdout_step1_tune_calibration": "HF_HUB_OFFLINE=1 python experiments/evaluate.py --dataset <private-calibration-holdout.json> --corpus-root <corpus-dir> --tune --output experiments/results/calibration-tune.json",
+      "holdout_step2_frozen_llm_eval": "HF_HUB_OFFLINE=1 LLM_TORCH_DTYPE=auto python experiments/evaluate.py --dataset <private-calibration-holdout.json> --corpus-root <corpus-dir> --frozen-selection experiments/results/calibration-tune.json --llm --output experiments/results/holdout-llm-eval.json"
+    }
+  },
+  "real_model": true
+}

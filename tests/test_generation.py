@@ -152,3 +152,104 @@ def test_production_missing_transformers_is_not_a_fake_success(monkeypatch):
     monkeypatch.setitem(sys.modules,'transformers',None)
     with pytest.raises(LLMGenerationError,match='transformers'):module.generate_answer([])
     assert calls==[]
+
+
+@pytest.mark.parametrize("configured_dtype,cuda_available,expected_dtype", [
+    ("auto", False, "torch.float32"),
+    ("auto", True, "auto"),
+    ("float32", False, "torch.float32"),
+    ("bfloat16", False, "torch.bfloat16"),
+    ("float16", False, "torch.float16"),
+])
+def test_create_text_generator_resolves_dtype_and_sets_low_cpu_mem_usage(
+    monkeypatch, configured_dtype, cuda_available, expected_dtype
+):
+    import sys
+    import app.rag.generation as module
+    from app.rag.config import model_manifest
+
+    record = model_manifest()["llm"]
+    calls = []
+    tokenizer = object()
+
+    class Tokenizer:
+        @staticmethod
+        def from_pretrained(name, **kwargs):
+            return tokenizer
+
+    generator = SimpleNamespace(model=SimpleNamespace(generation_config=SimpleNamespace()))
+
+    def pipeline(task, **kwargs):
+        calls.append((task, kwargs))
+        return generator
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: cuda_available),
+        float32="torch.float32",
+        bfloat16="torch.bfloat16",
+        float16="torch.float16",
+    )
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=Tokenizer, pipeline=pipeline))
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(module, "configure_torch_threads", lambda *args: None)
+
+    assert module._create_text_generator(record["repository"], record["revision"], torch_dtype=configured_dtype) is generator
+    assert calls[0][0] == "text-generation"
+    assert calls[0][1]["dtype"] == expected_dtype
+    assert calls[0][1]["model_kwargs"] == {"low_cpu_mem_usage": True}
+
+
+def test_env_llm_torch_dtype_and_cache_separation(monkeypatch):
+    import app.rag.generation as module
+    from app.rag.config import model_manifest
+
+    record = model_manifest()["llm"]
+    module.get_text_generator.cache_clear()
+    calls = []
+
+    def fake_create(name, revision, torch_dtype=None):
+        obj = object()
+        calls.append((name, revision, torch_dtype, obj))
+        return obj
+
+    monkeypatch.setattr(module, "_create_text_generator", fake_create)
+    try:
+        monkeypatch.setenv("LLM_TORCH_DTYPE", "bfloat16")
+        bf16_env = module.get_text_generator(record["repository"], revision=record["revision"])
+        assert module.get_text_generator(record["repository"], revision=record["revision"], torch_dtype="bfloat16") is bf16_env
+        fp32_explicit = module.get_text_generator(record["repository"], revision=record["revision"], torch_dtype="float32")
+        assert fp32_explicit is not bf16_env
+        assert len(calls) == 2
+        assert calls[0][2] is None
+        assert calls[1][2] == "float32"
+    finally:
+        module.get_text_generator.cache_clear()
+
+
+def test_generate_answer_forwards_and_validates_torch_dtype(monkeypatch):
+    import sys
+    import app.rag.generation as module
+
+    seen = []
+
+    class Config:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    def generator(*args, **kwargs):
+        return [{"generated_text": "ok"}]
+
+    attach_tokenizer(generator)
+
+    def fake_get(model_name, revision=None, torch_dtype=None):
+        seen.append((model_name, revision, torch_dtype))
+        return generator
+
+    monkeypatch.setattr(module, "get_text_generator", fake_get)
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(GenerationConfig=Config))
+
+    assert module.generate_answer([], torch_dtype="bfloat16") == "ok"
+    assert seen[-1][2] == "bfloat16"
+
+    with pytest.raises(ValueError, match="LLM_TORCH_DTYPE"):
+        module.generate_answer([], torch_dtype="int4")

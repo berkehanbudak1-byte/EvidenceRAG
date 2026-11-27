@@ -29,6 +29,21 @@ def normalize_llm_provider(value):
     return provider
 
 
+LLM_TORCH_DTYPES = frozenset({"auto", "float32", "bfloat16", "float16"})
+
+
+def normalize_llm_torch_dtype(value):
+    """Accept 'auto', 'float32', 'bfloat16', or 'float16'."""
+    if value is None:
+        return "auto"
+    if not isinstance(value, str):
+        raise ValueError("LLM_TORCH_DTYPE must be one of: auto, float32, bfloat16, float16")
+    dtype = value.strip().lower() or "auto"
+    if dtype not in LLM_TORCH_DTYPES:
+        raise ValueError("LLM_TORCH_DTYPE must be one of: auto, float32, bfloat16, float16")
+    return dtype
+
+
 def validate_xai_model_name(model_name):
     """Validate xAI Grok model identifiers strictly to prevent path/payload injection."""
     if not isinstance(model_name, str) or not XAI_MODEL_NAME_RE.fullmatch(model_name):
@@ -178,6 +193,7 @@ class Settings:
     )
     llm_provider: str = field(default_factory=_str_env("LLM_PROVIDER", "local"))
     llm_model_name: str = field(default_factory=_str_env("LLM_MODEL_NAME", "Qwen/Qwen2.5-1.5B-Instruct"))
+    llm_torch_dtype: str = field(default_factory=_str_env("LLM_TORCH_DTYPE", "auto"))
     embedding_model_revision: str | None = field(default_factory=_str_env("EMBEDDING_MODEL_REVISION", None))
     llm_model_revision: str | None = field(default_factory=_str_env("LLM_MODEL_REVISION", None))
     xai_api_key: str | None = field(
@@ -271,6 +287,8 @@ class Settings:
             )
         provider = normalize_llm_provider(self.llm_provider)
         object.__setattr__(self, "llm_provider", provider)
+        torch_dtype = normalize_llm_torch_dtype(self.llm_torch_dtype)
+        object.__setattr__(self, "llm_torch_dtype", torch_dtype)
         validate_xai_model_name(self.xai_model_name)
         validate_xai_api_url(self.xai_api_url)
         if provider == "xai":
@@ -353,6 +371,7 @@ class Settings:
                 "revision": self.llm_model_revision,
                 "tokenizer_repository": self.llm_model_name,
                 "tokenizer_revision": self.llm_model_revision,
+                "torch_dtype": self.llm_torch_dtype,
             }
         return {"retrieval": {"hybrid":self.hybrid_search,"candidates":self.retrieval_candidates,
                               "keyword_weight":self.keyword_weight,"reranker":self.reranker_model_name,
