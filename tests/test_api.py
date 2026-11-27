@@ -443,3 +443,51 @@ def test_api_distinguishes_precommit_and_visible_durability_error(tmp_path,monke
             assert client.get("/health").json()["store_operation_id"]==body["operation_id"]
         else:
             assert upload(client,"second.txt","Second 2025").status_code==200
+
+
+def test_upload_returns_400_when_ocr_rejects_unsafe_embedded_image(client, monkeypatch):
+    from types import SimpleNamespace
+    from app.rag import document_loader
+
+    monkeypatch.setattr(
+        main.rag_pipeline,
+        "settings",
+        replace(main.rag_pipeline.settings, ocr_languages="tr"),
+    )
+    fake_page = SimpleNamespace(
+        extract_text=lambda: "",
+        images=[
+            SimpleNamespace(
+                data=b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\nshowpage\n"
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        document_loader,
+        "PdfReader",
+        lambda _path: SimpleNamespace(pages=[fake_page]),
+    )
+
+    response = client.post(
+        "/documents",
+        files={"file": ("scan.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert "signature" in response.json()["detail"].lower()
+    assert client.get("/documents").json()["documents"] == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\nshowpage\n",
+        b"\xc5\xd0\xd3\xc6" + b"\x00" * 28,
+    ],
+)
+def test_upload_returns_400_for_raw_eps_disguised_as_pdf(client, payload):
+    response = client.post(
+        "/documents",
+        files={"file": ("disguised.pdf", payload, "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert client.get("/documents").json()["documents"] == []
