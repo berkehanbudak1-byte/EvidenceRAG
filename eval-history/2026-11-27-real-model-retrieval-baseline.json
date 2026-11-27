@@ -1,0 +1,366 @@
+{
+  "schema_version": 2,
+  "created_at": "2026-11-27T21:34:38.957380+00:00",
+  "execution_kind": "real_model",
+  "mode": "evaluation",
+  "status": "completed",
+  "data_gate": "source_labels_valid",
+  "quality_promotion_gate": "not_evaluated",
+  "model_resistance": "unmeasured",
+  "metric_scope": "all_executed_splits",
+  "preflight_questions": 41,
+  "split_counts": {
+    "legacy_regression": 41,
+    "calibration": 0,
+    "holdout": 0
+  },
+  "fingerprint": "e2e73bde4af9346f8931cbc9b9d7106a249cd1219de978161bd634abf433aa60",
+  "tuning_fingerprint": "82b74d3d867a38a82434b10519396db81ca993c8abdd74cd3555ec5927859e4c",
+  "dataset": "experiments/eval/dataset.json",
+  "oracle_errors": {},
+  "index_errors": [],
+  "identity": {
+    "dataset_sha256": "52ba35bbd3c67829c86b88ad4e14f8d8a607df5cc065ed44b2901e535ff84ed6",
+    "corpus": {
+      "izin_yonergesi.md": {
+        "source_sha256": "ce5d0b495dc4ef94a5800ddd289dd758924b578ce9c4290d5c80e354f4e32baa",
+        "file_sha256": "ce5d0b495dc4ef94a5800ddd289dd758924b578ce9c4290d5c80e354f4e32baa"
+      },
+      "mavi_korfez_2025.md": {
+        "source_sha256": "b9c421cb3c807951f9c4952c52c37a2a12ad46213f0e38909ea7d7a46571d10f",
+        "file_sha256": "b9c421cb3c807951f9c4952c52c37a2a12ad46213f0e38909ea7d7a46571d10f"
+      },
+      "ornek_rapor.md": {
+        "source_sha256": "ec7c6956e7b80bbfb0e39bccfa527cffd699ac11acf61b6ab2c7130526c81c68",
+        "file_sha256": "ec7c6956e7b80bbfb0e39bccfa527cffd699ac11acf61b6ab2c7130526c81c68"
+      }
+    },
+    "qrels_sha256": "e2dd94f574f745fbe2706b24d5abe373bb7175e9f9cc32f90dd2bb6b59add952",
+    "evaluator_source_sha256": "94715ef25aff2485fb7a39b6dbdbd860bf53a9b971401bde0c0e9c3882c31a7d",
+    "diagnostics_identity": {
+      "source_sha256": "9c09f9267e52148c7db686626b3a6ffc4fb559226720bc6b300e34b2386d2aeb",
+      "prompt_sha256": "3232772a4e8794bc4eec4b413986ed020062f430c12d4694fbaca576fc3cf4cc",
+      "runtime": {
+        "numpy": "2.5.5",
+        "faiss-cpu": "1.16.0",
+        "transformers": "5.17.0",
+        "sentence-transformers": "6.1.0",
+        "fastapi": "0.165.0"
+      },
+      "retrieval": {
+        "hybrid": true,
+        "candidates": 30,
+        "keyword_weight": 0.5,
+        "reranker": "",
+        "reranker_revision": null,
+        "rerank_candidates": 20
+      },
+      "embedding": {
+        "repository": "intfloat/multilingual-e5-small",
+        "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "tokenizer_repository": "intfloat/multilingual-e5-small",
+        "tokenizer_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+      },
+      "llm": {
+        "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+        "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+        "tokenizer_repository": "Qwen/Qwen2.5-1.5B-Instruct",
+        "tokenizer_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
+      },
+      "index_signature": {
+        "schema_version": 2,
+        "embedding_model_name": "intfloat/multilingual-e5-small",
+        "embedding_model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "tokenizer": {
+          "repository": "intfloat/multilingual-e5-small",
+          "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+        },
+        "embedding_query_prefix": "query: ",
+        "embedding_passage_prefix": "passage: ",
+        "normalization": "l2",
+        "embedding_dimension": 384,
+        "preprocessing_version": 2,
+        "ocr_languages": "tr,en",
+        "ingestion": {
+          "strategy": "markdown_v1",
+          "version": 1,
+          "chunk_size": 800,
+          "chunk_overlap": 100
+        }
+      },
+      "configured_index_signature": {
+        "schema_version": 2,
+        "embedding_model_name": "intfloat/multilingual-e5-small",
+        "embedding_model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "tokenizer": {
+          "repository": "intfloat/multilingual-e5-small",
+          "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+        },
+        "embedding_query_prefix": "query: ",
+        "embedding_passage_prefix": "passage: ",
+        "normalization": "l2",
+        "embedding_dimension": 384,
+        "preprocessing_version": 2,
+        "ocr_languages": "tr,en",
+        "ingestion": {
+          "strategy": "markdown_v1",
+          "version": 1,
+          "chunk_size": 800,
+          "chunk_overlap": 100
+        }
+      },
+      "index_operation_id": null,
+      "identity_sha256": "5e1482d13beda56ff81137fa74132207aa806decf1d3f9b88728fb4781c0fc7b"
+    },
+    "context_budget_chars": 16000,
+    "settings_summary": {
+      "chunker_strategy": "markdown_v1",
+      "ingestion_version": 1,
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "top_k": 5,
+      "relevance_threshold": 0.8,
+      "hybrid_search": true,
+      "keyword_weight": 0.5,
+      "max_new_tokens": 256
+    },
+    "split_membership_count": 41
+  },
+  "index_observation": {
+    "effective_dimension": 384,
+    "chunks": 17,
+    "signature": {
+      "schema_version": 2,
+      "embedding_model_name": "intfloat/multilingual-e5-small",
+      "embedding_model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "tokenizer": {
+        "repository": "intfloat/multilingual-e5-small",
+        "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+      },
+      "embedding_query_prefix": "query: ",
+      "embedding_passage_prefix": "passage: ",
+      "normalization": "l2",
+      "embedding_dimension": 384,
+      "preprocessing_version": 2,
+      "ocr_languages": "tr,en",
+      "ingestion": {
+        "strategy": "markdown_v1",
+        "version": 1,
+        "chunk_size": 800,
+        "chunk_overlap": 100
+      }
+    }
+  },
+  "models_verified": {
+    "embedding": {
+      "repository": "intfloat/multilingual-e5-small",
+      "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "cache_bytes": 493294398,
+      "config_sha256_match": true,
+      "tokenizer_config_sha256_match": true
+    },
+    "llm": {
+      "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "cache_bytes": 3098973447,
+      "config_sha256_match": true,
+      "tokenizer_config_sha256_match": true
+    }
+  },
+  "retrieval": {
+    "answerable": {
+      "count": 24,
+      "hit_at_1": 1.0,
+      "hit_at_k": 1.0,
+      "group_mrr": 1.0,
+      "chunk_coverage_failures": 0,
+      "coverage_unverified": 0,
+      "gold_retained": 1.0
+    },
+    "answerable_english": {
+      "count": 3,
+      "hit_at_1": 1.0,
+      "hit_at_k": 1.0,
+      "group_mrr": 1.0,
+      "chunk_coverage_failures": 0,
+      "coverage_unverified": 0,
+      "gold_retained": 1.0
+    }
+  },
+  "category_threshold_summary": {
+    "answerable": {
+      "count": 24,
+      "accepted_evidence": 24,
+      "rejected": 0,
+      "top_score_min": 0.869005,
+      "top_score_max": 0.950449
+    },
+    "answerable_english": {
+      "count": 3,
+      "accepted_evidence": 3,
+      "rejected": 0,
+      "top_score_min": 0.823079,
+      "top_score_max": 0.874091
+    },
+    "unanswerable_related": {
+      "count": 8,
+      "accepted_evidence": 8,
+      "rejected": 0,
+      "top_score_min": 0.824131,
+      "top_score_max": 0.909958
+    },
+    "unanswerable_offtopic": {
+      "count": 6,
+      "accepted_evidence": 0,
+      "rejected": 6,
+      "top_score_min": 0.746908,
+      "top_score_max": 0.79535
+    }
+  },
+  "chunking_ablation_retrieval": {
+    "compare_reports_validated": true,
+    "ablation_manifest": "experiments/eval/chunking_ablation_manifest.json",
+    "legacy_character": {
+      "fingerprint": "f0e784de6a10fd449afce5b114aed8e590e33f8f3f6bbd77b3e219de6aa6d5a4",
+      "chunks": 8,
+      "retrieval": {
+        "answerable": {
+          "count": 24,
+          "hit_at_1": 0.75,
+          "hit_at_k": 0.9166666666666666,
+          "group_mrr": 0.8333333333333334,
+          "chunk_coverage_failures": 2,
+          "coverage_unverified": 0,
+          "gold_retained": 0.9166666666666666
+        },
+        "answerable_english": {
+          "count": 3,
+          "hit_at_1": 0.6666666666666666,
+          "hit_at_k": 1.0,
+          "group_mrr": 0.7777777777777778,
+          "chunk_coverage_failures": 0,
+          "coverage_unverified": 0,
+          "gold_retained": 0.6666666666666666
+        }
+      },
+      "category_threshold_summary": {
+        "answerable": {
+          "count": 24,
+          "accepted_evidence": 24,
+          "rejected": 0,
+          "top_score_min": 0.83884,
+          "top_score_max": 0.91949
+        },
+        "answerable_english": {
+          "count": 3,
+          "accepted_evidence": 2,
+          "rejected": 1,
+          "top_score_min": 0.797789,
+          "top_score_max": 0.835655
+        },
+        "unanswerable_related": {
+          "count": 8,
+          "accepted_evidence": 8,
+          "rejected": 0,
+          "top_score_min": 0.830704,
+          "top_score_max": 0.88724
+        },
+        "unanswerable_offtopic": {
+          "count": 6,
+          "accepted_evidence": 1,
+          "rejected": 5,
+          "top_score_min": 0.759548,
+          "top_score_max": 0.801416
+        }
+      }
+    },
+    "structured_v2": {
+      "fingerprint": "3b22367196adeb49bc2b327fef414050a0ec03e495915fdaa95c0a7fdfa1f239",
+      "chunks": 19,
+      "retrieval": {
+        "answerable": {
+          "count": 24,
+          "hit_at_1": 0.8333333333333334,
+          "hit_at_k": 1.0,
+          "group_mrr": 0.9027777777777778,
+          "chunk_coverage_failures": 0,
+          "coverage_unverified": 0,
+          "gold_retained": 1.0
+        },
+        "answerable_english": {
+          "count": 3,
+          "hit_at_1": 0.3333333333333333,
+          "hit_at_k": 1.0,
+          "group_mrr": 0.5,
+          "chunk_coverage_failures": 0,
+          "coverage_unverified": 0,
+          "gold_retained": 0.6666666666666666
+        }
+      },
+      "category_threshold_summary": {
+        "answerable": {
+          "count": 24,
+          "accepted_evidence": 24,
+          "rejected": 0,
+          "top_score_min": 0.824802,
+          "top_score_max": 0.94576
+        },
+        "answerable_english": {
+          "count": 3,
+          "accepted_evidence": 3,
+          "rejected": 0,
+          "top_score_min": 0.800003,
+          "top_score_max": 0.819052
+        },
+        "unanswerable_related": {
+          "count": 8,
+          "accepted_evidence": 8,
+          "rejected": 0,
+          "top_score_min": 0.813358,
+          "top_score_max": 0.891653
+        },
+        "unanswerable_offtopic": {
+          "count": 6,
+          "accepted_evidence": 0,
+          "rejected": 6,
+          "top_score_min": 0.756731,
+          "top_score_max": 0.79763
+        }
+      }
+    },
+    "delta_structured_v2_vs_legacy_character": {
+      "answerable_hit_at_1": 0.083333,
+      "answerable_hit_at_k": 0.083333,
+      "answerable_group_mrr": 0.069444,
+      "answerable_chunk_coverage_failures": -2,
+      "answerable_english_hit_at_1": -0.333333
+    }
+  },
+  "llm_verification": {
+    "pytest_real_model_smoke": {
+      "test": "tests/test_end_to_end.py::test_explicit_cache_only_real_model_smoke",
+      "status": "passed",
+      "duration_seconds": 131.59,
+      "offline_cache_only": true,
+      "max_new_tokens": 16
+    },
+    "full_dataset_llm_evaluation": {
+      "status": "not_evaluated_cpu_constrained",
+      "questions_requiring_llm": 35,
+      "hardware": "2 vCPU Intel Xeon @ 2.30GHz (AVX2, no AVX-512 BF16), 7.8 GiB RAM + 8.0 GiB swap",
+      "observed_float32_behavior": "Spilled 4.1 GiB to swap during model load/inference (80s load, swap-thrashing on 7.2 GiB available RAM)",
+      "observed_bfloat16_single_question": {
+        "question_id": "yv-su-kaybi",
+        "load_seconds": 1.8,
+        "generation_seconds": 217.56,
+        "rss_gib": 3.87,
+        "swap_gib": 0.0,
+        "reason": "answered",
+        "lexical_match": true
+      },
+      "note": "Full 35-question --llm evaluation on 2 vCPUs without GPU or AVX-512 BF16 projects to ~2.1 hours; remains open for GPU/AVX-512 host along with independent calibration/holdout split and semantic rubric for #13 quality_promotion_gate."
+    }
+  },
+  "answers": "not_evaluated_full_dataset",
+  "real_model": true
+}
