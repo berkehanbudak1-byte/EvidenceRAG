@@ -8,7 +8,11 @@ from .config import InputLimitError, Settings
 from .document_loader import load_document
 from .embedding import embed_texts
 from .generation import generate_answer
-from .grounding import calculate_evidence_confidence, verify_answer
+from .grounding import (
+    calculate_evidence_confidence,
+    inspect_evidence_for_injection,
+    verify_answer,
+)
 from .prompt import NO_EVIDENCE_MARKER, build_messages
 from .retrieval import retrieve
 from .reranking import rerank
@@ -34,7 +38,19 @@ class RAGPipeline:
         self.settings = settings or Settings()
         self._default_generation = generation_function is generate_answer
         self.embedding_function = partial(embed_texts,revision=self.settings.embedding_model_revision) if embedding_function is embed_texts else embedding_function
-        self.generation_function = partial(generate_answer,revision=self.settings.llm_model_revision) if generation_function is generate_answer else generation_function
+        if generation_function is generate_answer:
+            if self.settings.llm_provider == "xai":
+                self.generation_function = partial(
+                    generate_answer,
+                    provider="xai",
+                    api_key=self.settings.xai_api_key,
+                    api_url=self.settings.xai_api_url,
+                    timeout_seconds=self.settings.xai_timeout_seconds,
+                )
+            else:
+                self.generation_function = partial(generate_answer, revision=self.settings.llm_model_revision)
+        else:
+            self.generation_function = generation_function
         self.runtime = runtime or get_runtime()
         self.vector_store = vector_store or VectorStore(
             max_chunks=self.settings.max_store_chunks,
@@ -142,11 +158,17 @@ class RAGPipeline:
             mark_reason("retrieval_no_evidence")
             return _insufficient_evidence()
 
+        injection_report = inspect_evidence_for_injection(evidence)
         messages = build_messages(question, evidence)
         generator = self.generation_function if self._default_generation else partial(invoke_generator, self.generation_function)
+        active_model_name = (
+            self.settings.xai_model_name
+            if self.settings.llm_provider == "xai"
+            else self.settings.llm_model_name
+        )
         answer = generator(
             messages,
-            model_name=self.settings.llm_model_name,
+            model_name=active_model_name,
             max_new_tokens=self.settings.max_new_tokens,
         )
         # The model signals unanswerable questions with a marker so the reply does not
@@ -157,10 +179,16 @@ class RAGPipeline:
 
         with phase("verification"):
             verification = verify_answer(answer, evidence, question)
+            if injection_report["detected"]:
+                verification["prompt_injection_warnings"] = injection_report["warnings"]
         mark_reason("answered")
         return {
             "answer": answer,
-            "sources": _sources_from(evidence, verification["citations"]),
+            "sources": _sources_from(
+                evidence,
+                verification["citations"],
+                injection_report=injection_report,
+            ),
             "verification": verification,
         }
 
@@ -177,14 +205,19 @@ class RAGPipeline:
         from .embedding import get_embedding_model
         from .generation import get_text_generator
         get_embedding_model(self.settings.embedding_model_name,revision=self.settings.embedding_model_revision)
-        get_text_generator(self.settings.llm_model_name,revision=self.settings.llm_model_revision)
+        if self.settings.llm_provider == "local":
+            get_text_generator(self.settings.llm_model_name,revision=self.settings.llm_model_revision)
 
 
 def _insufficient_evidence():
     return {"answer": INSUFFICIENT_EVIDENCE, "sources": [], "verification": None}
 
 
-def _sources_from(evidence, citations):
+def _sources_from(evidence, citations, injection_report=None):
+    warnings_by_index = {
+        warning["evidence_number"]: warning
+        for warning in (injection_report or {}).get("warnings", [])
+    }
     return [
         {
             "evidence_number": index,
@@ -196,6 +229,14 @@ def _sources_from(evidence, citations):
             "source": item.get("source"),
             "chunk_id": item.get("chunk_id"),
             "score": item.get("score"),
+            **(
+                {
+                    "injection_flagged": True,
+                    "injection_rules": warnings_by_index[index]["rules"],
+                }
+                if index in warnings_by_index
+                else {}
+            ),
             **({"provenance":{key:item.get(key) for key in ("char_start","char_end","source_sha256","source_representation","offset_unit","strategy","ingestion_version","normalization_version","heading_path","hard_split")}} if "char_start" in item else {}),
         }
         for index, item in enumerate(evidence, start=1)

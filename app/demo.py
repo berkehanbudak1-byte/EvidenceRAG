@@ -65,7 +65,11 @@ def _extract_evidence_texts(user_content):
     import json
 
     texts = []
-    for match in re.finditer(r"Kanıt\s+(\d+)\s*\|\s*(\{.*?\})(?=\n\nKanıt\s+\d+\s*\||\n\nQuestion:|$)", user_content, re.S):
+    for match in re.finditer(
+        r"Kanıt\s+(\d+)\s*\|\s*(\{.*?\})(?=\n</untrusted_data>|\n\nKanıt\s+\d+\s*\||\n\nQuestion:|$)",
+        user_content,
+        re.S,
+    ):
         try:
             payload = json.loads(match.group(2))
         except json.JSONDecodeError:

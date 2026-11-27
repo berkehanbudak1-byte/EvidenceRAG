@@ -26,7 +26,7 @@ from app.demo import (
     seed_sample_corpus,
 )
 from app.request_limits import BodyLimitMiddleware, bounded_upload
-from app.rag.document_loader import DocumentError
+from app.rag.document_loader import DocumentError, validate_upload_filename
 from app.rag.generation import LLMGenerationError
 from app.rag.pipeline import RAGPipeline
 from app.rag.vector_store import DuplicateDocumentError, VectorStore, StoreWriteError
@@ -181,7 +181,10 @@ async def upload_document(request: Request):
 
 
 async def _index_upload(file):
-    filename = file.filename or ""
+    try:
+        filename = validate_upload_filename(file.filename or "")
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     suffix = Path(filename).suffix.lower()
     if suffix not in {".pdf", ".txt", ".md"}:
         raise HTTPException(status_code=400, detail="Supported files are PDF, TXT, and MD")
@@ -242,6 +245,15 @@ def _store_error_response(exc):
 @app.delete("/documents/{document_id}")
 async def delete_document(document_id: str):
     _require_service_accepting()
+    if (
+        not document_id
+        or len(document_id) > 128
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in document_id)
+        or "/" in document_id
+        or "\\" in document_id
+        or ".." in document_id
+    ):
+        raise HTTPException(status_code=400, detail="Invalid document_id")
     try:
         deleted = await rag_pipeline.runtime.run_async("index", rag_pipeline.delete_document, document_id)
     except StoreWriteError as exc:

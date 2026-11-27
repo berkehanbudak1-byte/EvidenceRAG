@@ -287,6 +287,13 @@ function verificationWarnings(verification) {
         const cited = invalidCitations.map((number) => `Kanıt ${number}`).join(", ");
         warnings.push(`Cevap var olmayan kaynaklara atıf yapıyor: ${cited}.`);
     }
+    const injectionWarnings = verification.prompt_injection_warnings || [];
+    if (injectionWarnings.length) {
+        const flagged = injectionWarnings.map((item) => `Kanıt ${item.evidence_number}`).join(", ");
+        warnings.push(
+            `Güvenlik uyarısı: ${flagged} içinde olası prompt enjeksiyonu kalıpları tespit edildi ve sistem kuralları korundu.`
+        );
+    }
     return warnings;
 }
 

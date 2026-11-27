@@ -688,12 +688,74 @@ def build_citation_coverage_matrix(answer, evidence):
     }
 
 
-_INJECTION_PATTERNS = (
-    re.compile(r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions", re.IGNORECASE),
-    re.compile(r"system\s*prompt\s*override", re.IGNORECASE),
-    re.compile(r"you\s+are\s+now\s+in\s+developer\s+mode", re.IGNORECASE),
-    re.compile(r"<\s*/?\s*(?:system|instruction|admin_override|prompt)\s*>", re.IGNORECASE),
+_INJECTION_RULES = (
+    (
+        "ignore_instructions",
+        re.compile(
+            r"(?:ignore|disregard|forget|bypass)\s+(?:all\s+)?(?:previous|prior|above|preceding|system)\s+"
+            r"(?:instructions?|rules?|prompts?|directives?)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "system_prompt_override",
+        re.compile(
+            r"(?:system\s*prompt\s*override|override\s+(?:the\s+)?system\s+(?:prompt|instructions?|rules?)|"
+            r"new\s+system\s+(?:prompt|instructions?|rules?)|do\s+not\s+follow\s+(?:the\s+)?(?:system|above)\s+rules?)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "role_hijack",
+        re.compile(
+            r"(?:you\s+are\s+now\s+(?:in\s+)?(?:developer\s+mode|unrestricted|dan\b|jailbreak)|"
+            r"act\s+as\s+(?:a\s+)?(?:system|root|admin|unrestricted\s+assistant)|"
+            r"geliştirici\s+modun(?:a\s+geç|da))",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "turkish_instruction_override",
+        re.compile(
+            r"(?:(?:önceki|yukarıdaki|sistem)\s+talimatlar[ıi]n?[ıi]?\s+(?:yok\s+say|unut|görmezden\s+gel|ihmal\s+et)|"
+            r"dış\s+bilgiyle\s+yanıtla|protokol[üu]\s+değiştir|yeni\s+kural\s*:)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "delimiter_tag_breakout",
+        re.compile(
+            r"<\s*/?\s*(?:system|instruction|instructions|admin_override|prompt|untrusted_evidence|"
+            r"untrusted_data|evidence|assistant|user|developer|tool_call|function_call)\b[^>]*>",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "special_token_breakout",
+        re.compile(
+            r"(?:<\|\s*(?:im_start|im_end|system|user|assistant|endoftext|eot_id|start_header_id|end_header_id)\s*\|>|"
+            r"\[/?INST\]|<<\s*/?SYS\s*>>)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "role_header_forgery",
+        re.compile(
+            r"(?m)^\s*(?:SYSTEM|DEVELOPER|ASSISTANT|END_EVIDENCE|BEGIN_SYSTEM|OVERRIDE)\s*:",
+        ),
+    ),
+    (
+        "secret_exfiltration",
+        re.compile(
+            r"(?:reveal|leak|print|dump|exfiltrate|output|show)\s+(?:the\s+|your\s+)?"
+            r"(?:system\s+prompt|api[_\s-]?key|xai[_\s-]?api[_\s-]?key|grok[_\s-]?api[_\s-]?key|"
+            r"secret|credentials?|environment\s+variables?)",
+            re.IGNORECASE,
+        ),
+    ),
 )
+
+_INJECTION_PATTERNS = tuple(pattern for _name, pattern in _INJECTION_RULES)
 
 
 def scrub_url_credentials(text):
@@ -709,12 +771,96 @@ def scrub_url_credentials(text):
     return s
 
 
+def detect_prompt_injection(text, *, filename=None):
+    """Detect indirect prompt injection patterns across evidence text and optional filename."""
+    rules = []
+    matches = []
+    for field_name, raw_value in (("text", text), ("filename", filename)):
+        if not raw_value:
+            continue
+        value = str(raw_value)
+        for rule_name, pattern in _INJECTION_RULES:
+            found = pattern.search(value)
+            if found:
+                if rule_name not in rules:
+                    rules.append(rule_name)
+                snippet = scrub_url_credentials(found.group(0))[:80]
+                matches.append({"rule": rule_name, "field": field_name, "snippet": snippet})
+    return {
+        "detected": bool(rules),
+        "rules": rules,
+        "matches": matches,
+    }
+
+
+def inspect_evidence_for_injection(evidence_items):
+    """Inspect all retrieved evidence chunks for indirect prompt injection attempts."""
+    warnings = []
+    flagged_evidence = []
+    for idx, item in enumerate(evidence_items or [], start=1):
+        if isinstance(item, dict):
+            raw_text = str(item.get("text", "") or "")
+            raw_filename = item.get("filename")
+            raw_source = item.get("source")
+        else:
+            raw_text = str(item or "")
+            raw_filename = None
+            raw_source = None
+
+        text_check = detect_prompt_injection(raw_text)
+        file_check = detect_prompt_injection("", filename=raw_filename)
+        source_check = (
+            detect_prompt_injection("", filename=raw_source)
+            if raw_source and raw_source != raw_filename
+            else {"detected": False, "rules": []}
+        )
+
+        combined_rules = []
+        fields = []
+        for field_label, check in (
+            ("text", text_check),
+            ("filename", file_check),
+            ("source", source_check),
+        ):
+            if check["detected"]:
+                fields.append(field_label)
+                for rule in check["rules"]:
+                    if rule not in combined_rules:
+                        combined_rules.append(rule)
+
+        if combined_rules:
+            flagged_evidence.append(idx)
+            warnings.append(
+                {
+                    "evidence_number": idx,
+                    "filename": raw_filename,
+                    "fields": fields,
+                    "rules": combined_rules,
+                }
+            )
+
+    return {
+        "detected": bool(warnings),
+        "flagged_count": len(flagged_evidence),
+        "flagged_evidence": flagged_evidence,
+        "warnings": warnings,
+    }
+
+
 def sanitize_untrusted_evidence(text):
-    """Neutralize XML tag escapes and indirect prompt injection directives in retrieved evidence."""
+    """Neutralize XML tag escapes, special LLM tokens, and indirect prompt injection directives."""
     s = scrub_url_credentials(text)
     s = re.sub(
-        r"<\s*(/?)\s*(system|instruction|evidence|untrusted_data)\b[^>]*>",
+        r"<\s*(/?)\s*(system|instruction|instructions|admin_override|prompt|evidence|"
+        r"untrusted_data|untrusted_evidence|assistant|user|developer|tool_call|function_call)\b[^>]*>",
         r"[\1\2]",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(
+        r"(?:<\|\s*(?:im_start|im_end|system|user|assistant|endoftext|eot_id|start_header_id|end_header_id)\s*\|>|"
+        r"\[/?INST\]|<<\s*/?SYS\s*>>)",
+        "[TOKEN_FILTERED]",
         s,
         flags=re.IGNORECASE,
     )
@@ -729,7 +875,9 @@ def wrap_untrusted_evidence(evidence_items):
     flagged_count = 0
     for idx, item in enumerate(evidence_items or [], start=1):
         raw_text = str(item.get("text", "") if isinstance(item, dict) else item)
-        flagged = any(pat.search(raw_text) for pat in _INJECTION_PATTERNS)
+        raw_filename = item.get("filename") if isinstance(item, dict) else None
+        detection = detect_prompt_injection(raw_text, filename=raw_filename)
+        flagged = detection["detected"]
         if flagged:
             flagged_count += 1
         clean_text = sanitize_untrusted_evidence(raw_text)
@@ -743,6 +891,7 @@ def wrap_untrusted_evidence(evidence_items):
         entry["clean_text"] = clean_text
         entry["wrapped"] = envelope
         entry["injection_flagged"] = flagged
+        entry["injection_rules"] = detection["rules"]
         wrapped_items.append(entry)
     return {
         "items": wrapped_items,

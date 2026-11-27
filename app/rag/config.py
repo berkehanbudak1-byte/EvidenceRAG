@@ -2,14 +2,70 @@ import os
 import json
 import re
 from functools import lru_cache
+import ipaddress
 from pathlib import Path
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from app.access import normalize_profile, parse_public_hosts
+
+XAI_DEFAULT_MODEL = "grok-3-mini"
+XAI_DEFAULT_API_URL = "https://api.x.ai/v1/chat/completions"
+XAI_MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
+_ALLOWED_XAI_HOST_SUFFIX = ".x.ai"
 
 
 class InputLimitError(ValueError):
     """An explicit input or store budget was exceeded (not a server failure)."""
+
+
+def normalize_llm_provider(value):
+    """Accept 'local' or 'xai' (alias 'grok')."""
+    provider = (value or "local").strip().lower()
+    if provider == "grok":
+        return "xai"
+    if provider not in {"local", "xai"}:
+        raise ValueError("LLM_PROVIDER must be 'local' or 'xai' (alias 'grok')")
+    return provider
+
+
+def validate_xai_model_name(model_name):
+    """Validate xAI Grok model identifiers strictly to prevent path/payload injection."""
+    if not isinstance(model_name, str) or not XAI_MODEL_NAME_RE.fullmatch(model_name):
+        raise ValueError(
+            "Invalid xAI model name: must match ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"
+        )
+    return model_name
+
+
+def validate_xai_api_url(url):
+    """Validate xAI endpoint URL strictly (HTTPS, x.ai domain only, no SSRF targets)."""
+    if not isinstance(url, str) or not url.strip() or any(c.isspace() or ord(c) < 32 for c in url):
+        raise ValueError("Invalid xAI API URL")
+    parsed = urlsplit(url)
+    if parsed.scheme != "https":
+        raise ValueError("xAI API URL must use https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("xAI API URL must not contain userinfo credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("xAI API URL must not contain query parameters or fragments")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise ValueError("xAI API URL must include a hostname")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("xAI API URL must not target a raw IP address")
+    if host != "api.x.ai" and not host.endswith(_ALLOWED_XAI_HOST_SUFFIX):
+        raise ValueError("xAI API URL host must be api.x.ai or a *.x.ai host")
+    if parsed.port not in (None, 443):
+        raise ValueError("xAI API URL must use port 443")
+    path = parsed.path or ""
+    if not path.startswith("/v1/") or "\\" in path or "/../" in path or path.endswith("/.."):
+        raise ValueError("xAI API URL path must stay under /v1/")
+    return url
 
 
 @lru_cache(maxsize=1)
@@ -31,6 +87,17 @@ def effective_revision(kind, model_name, revision=None):
 
 def _str_env(name, default):
     return lambda: os.getenv(name) or default
+
+
+def _first_env(names, default):
+    def read():
+        for name in names:
+            value = os.getenv(name)
+            if value:
+                return value
+        return default
+
+    return read
 
 
 def _prefix_env(name, default):
@@ -98,7 +165,7 @@ def _demo_env():
 @dataclass(frozen=True)
 class Settings:
     access_profile: str = field(default_factory=_str_env("ACCESS_PROFILE", "local"))
-    api_key: str | None = field(default_factory=_str_env("EVIDENCERAG_API_KEY", None))
+    api_key: str | None = field(default_factory=_str_env("EVIDENCERAG_API_KEY", None), repr=False)
     public_hosts: tuple = field(default_factory=lambda: parse_public_hosts(os.getenv("EVIDENCERAG_PUBLIC_HOST")))
     demo_mode: bool | None = field(default_factory=_demo_env)
     embedding_model_name: str = field(
@@ -109,9 +176,21 @@ class Settings:
     embedding_passage_prefix: str = field(
         default_factory=_prefix_env("EMBEDDING_PASSAGE_PREFIX", "passage: ")
     )
+    llm_provider: str = field(default_factory=_str_env("LLM_PROVIDER", "local"))
     llm_model_name: str = field(default_factory=_str_env("LLM_MODEL_NAME", "Qwen/Qwen2.5-1.5B-Instruct"))
     embedding_model_revision: str | None = field(default_factory=_str_env("EMBEDDING_MODEL_REVISION", None))
     llm_model_revision: str | None = field(default_factory=_str_env("LLM_MODEL_REVISION", None))
+    xai_api_key: str | None = field(
+        default_factory=_first_env(("XAI_API_KEY", "GROK_API_KEY"), None),
+        repr=False,
+    )
+    xai_model_name: str = field(
+        default_factory=_first_env(("XAI_MODEL_NAME", "GROK_MODEL_NAME"), XAI_DEFAULT_MODEL)
+    )
+    xai_api_url: str = field(
+        default_factory=_first_env(("XAI_API_URL", "GROK_API_URL"), XAI_DEFAULT_API_URL)
+    )
+    xai_timeout_seconds: int = field(default_factory=_int_env("XAI_TIMEOUT_SECONDS", 60))
     ingestion_version: int = field(default_factory=_int_env("INGESTION_VERSION", 1))
     chunker_strategy: str = field(default_factory=_str_env("CHUNKER_STRATEGY", "markdown_v1"))
     chunk_size: int = field(default_factory=_int_env("CHUNK_SIZE", 800))
@@ -182,18 +261,28 @@ class Settings:
                 "ACCESS_PROFILE supports 'local' or 'hosted' (alias 'cloud'); "
                 "shared/public access is not supported"
             )
-        for kind,name_field,revision_field in [
-            ("embedding","embedding_model_name","embedding_model_revision"),
-            ("llm","llm_model_name","llm_model_revision"),
-        ]:
-            revision=getattr(self,revision_field)
+        provider = normalize_llm_provider(self.llm_provider)
+        object.__setattr__(self, "llm_provider", provider)
+        validate_xai_model_name(self.xai_model_name)
+        validate_xai_api_url(self.xai_api_url)
+        if provider == "xai":
+            if not (self.xai_api_key and self.xai_api_key.strip()):
+                raise ValueError("LLM_PROVIDER=xai requires XAI_API_KEY or GROK_API_KEY")
+            object.__setattr__(self, "xai_api_key", self.xai_api_key.strip())
+        elif self.xai_api_key:
+            object.__setattr__(self, "xai_api_key", self.xai_api_key.strip())
+        revision_checks = [("embedding", "embedding_model_name", "embedding_model_revision")]
+        if provider == "local":
+            revision_checks.append(("llm", "llm_model_name", "llm_model_revision"))
+        for kind, name_field, revision_field in revision_checks:
+            revision = getattr(self, revision_field)
             if revision is None:
-                recorded=model_manifest()[kind]
-                if getattr(self,name_field)!=recorded["repository"]:
+                recorded = model_manifest()[kind]
+                if getattr(self, name_field) != recorded["repository"]:
                     raise ValueError(f"{revision_field} is required for a custom model repository")
-                revision=recorded["revision"]
-                object.__setattr__(self,revision_field,revision)
-            if not re.fullmatch(r"[0-9a-f]{40}",revision):
+                revision = recorded["revision"]
+                object.__setattr__(self, revision_field, revision)
+            if not re.fullmatch(r"[0-9a-f]{40}", revision):
                 raise ValueError(f"{revision_field} must be an immutable 40-character commit SHA")
         if self.chunker_strategy not in {"legacy_character","structured_v2","markdown_v1"}:
             raise ValueError("Unsupported CHUNKER_STRATEGY")
@@ -210,7 +299,7 @@ class Settings:
             "max_document_chunks", "max_store_chunks", "max_store_text_bytes",
             "max_active_heavy_jobs", "max_waiting_heavy_jobs", "ask_queue_capacity",
             "index_queue_capacity", "model_queue_capacity", "heavy_wait_seconds",
-            "ingestion_version",
+            "xai_timeout_seconds", "ingestion_version",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -244,11 +333,23 @@ class Settings:
         return {}  # Unknown until an explicitly pinned custom model is actually loaded.
 
     def model_identity(self):
+        if self.llm_provider == "xai":
+            llm_identity = {
+                "provider": "xai",
+                "model": self.xai_model_name,
+                "api_url": self.xai_api_url,
+            }
+        else:
+            llm_identity = {
+                "repository": self.llm_model_name,
+                "revision": self.llm_model_revision,
+                "tokenizer_repository": self.llm_model_name,
+                "tokenizer_revision": self.llm_model_revision,
+            }
         return {"retrieval": {"hybrid":self.hybrid_search,"candidates":self.retrieval_candidates,
                               "keyword_weight":self.keyword_weight,"reranker":self.reranker_model_name,
                               "reranker_revision":self.reranker_model_revision,"rerank_candidates":self.rerank_candidates},
                 "embedding": {"repository":self.embedding_model_name,"revision":self.embedding_model_revision,
                               "tokenizer_repository":self.embedding_model_name,"tokenizer_revision":self.embedding_model_revision},
-                "llm": {"repository":self.llm_model_name,"revision":self.llm_model_revision,
-                        "tokenizer_repository":self.llm_model_name,"tokenizer_revision":self.llm_model_revision},
+                "llm": llm_identity,
                 "index_signature":self.embedding_signature()}

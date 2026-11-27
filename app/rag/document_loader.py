@@ -22,6 +22,20 @@ class EmptyDocumentError(DocumentError):
     """Raised when a document contains no extractable text."""
 
 
+def validate_upload_filename(filename):
+    """Reject path traversal, directory separators, NUL bytes, and ASCII control chars."""
+    if not isinstance(filename, str) or not filename.strip():
+        raise DocumentError("Uploaded filename is required")
+    if "\x00" in filename or any(ord(ch) < 32 or ord(ch) == 127 for ch in filename):
+        raise DocumentError("Filename contains invalid control characters")
+    if "/" in filename or "\\" in filename:
+        raise DocumentError("Filename must not contain path separators")
+    stripped = filename.strip()
+    if stripped in {".", ".."} or stripped.startswith("..") or Path(stripped).name != stripped:
+        raise DocumentError("Filename must not contain path traversal segments")
+    return stripped
+
+
 def load_document(path, filename=None, source=None, document_id=None, ocr_languages=(), *, max_text_chars=2000000, max_pdf_pages=500):
     path = Path(path)
     if not path.exists() or not path.is_file():
