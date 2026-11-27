@@ -222,6 +222,7 @@ class Settings:
     )
     max_http_body_bytes: int = field(default_factory=_int_env("MAX_HTTP_BODY_BYTES", 20 * 1024 * 1024 + 65536))
     max_json_body_bytes: int = field(default_factory=_int_env("MAX_JSON_BODY_BYTES", 32768))
+    max_swarm_json_body_bytes: int = field(default_factory=_int_env("MAX_SWARM_JSON_BODY_BYTES", 131072))
     max_multipart_header_bytes: int = field(default_factory=_int_env("MAX_MULTIPART_HEADER_BYTES", 8192))
     max_filename_bytes: int = field(default_factory=_int_env("MAX_FILENAME_BYTES", 512))
     max_question_chars: int = field(default_factory=_int_env("MAX_QUESTION_CHARS", 4000))
@@ -294,7 +295,7 @@ class Settings:
             object.__setattr__(self, "max_upload_bytes", self.max_upload_mb * 1024 * 1024)
         for name in (
             "retrieval_candidates", "rerank_candidates", "chunk_size", "top_k", "max_new_tokens", "max_upload_mb", "max_upload_bytes",
-            "max_http_body_bytes", "max_json_body_bytes", "max_multipart_header_bytes",
+            "max_http_body_bytes", "max_json_body_bytes", "max_swarm_json_body_bytes", "max_multipart_header_bytes",
             "max_filename_bytes", "max_question_chars", "max_pdf_pages", "max_text_chars",
             "max_document_chunks", "max_store_chunks", "max_store_text_bytes",
             "max_active_heavy_jobs", "max_waiting_heavy_jobs", "ask_queue_capacity",

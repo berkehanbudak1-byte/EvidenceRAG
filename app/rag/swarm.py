@@ -13,12 +13,16 @@ with strict security invariants:
 
 from __future__ import annotations
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import os
 import re
+import threading
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
+import uuid
 
 from .config import (
     XAI_DEFAULT_API_URL,
@@ -80,8 +84,13 @@ DEFAULT_SLICE_TIMEOUT_SECONDS = 15.0
 MAX_SLICE_TIMEOUT_SECONDS = 60.0
 MAX_QUESTION_CHARS = 4000
 MAX_SLICE_EVIDENCE_ITEMS = 64
+MAX_VERIFY_SNIPPETS = 12
+MAX_VERIFY_SNIPPET_CHARS = 4000
+MAX_SWARM_HISTORY = 20
 
 _SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$")
+_SWARM_HISTORY_LOCK = threading.Lock()
+_SWARM_HISTORY: deque[dict[str, Any]] = deque(maxlen=MAX_SWARM_HISTORY)
 
 
 class SwarmPolicyError(ValueError):
@@ -376,6 +385,60 @@ def _deterministic_local_summary(slice_obj: SwarmSlice, isolated: Mapping[str, A
     return " ".join(parts) if parts else "NO_EVIDENCE"
 
 
+def _record_swarm_run(
+    *,
+    order_id: str,
+    provider: str,
+    model_name: str,
+    max_workers: int,
+    slice_results: Sequence[Mapping[str, Any]],
+    injection_summary: Mapping[str, Any],
+    traceability: Mapping[str, Any],
+    one_door_out: Mapping[str, Any],
+    duration_ms: float,
+) -> dict[str, Any]:
+    """Record a bounded, sanitized swarm run summary (no raw user text or secrets)."""
+    total_slices = len(slice_results)
+    succeeded = sum(1 for r in slice_results if r.get("status") == "ok")
+    summary = {
+        "order_id": order_id,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "provider": str(provider),
+        "model_name": str(model_name),
+        "max_workers": int(max_workers),
+        "slice_count": total_slices,
+        "succeeded_slices": succeeded,
+        "failed_slices": total_slices - succeeded,
+        "injection_detected": bool(injection_summary.get("detected", False)),
+        "injection_flagged_count": int(injection_summary.get("flagged_chunk_count", 0)),
+        "traceability_passed": bool(traceability.get("done_when_passed", False)),
+        "one_door_out_status": str(one_door_out.get("status", "UNKNOWN")),
+        "approval_required": bool(one_door_out.get("approval_required", False)),
+        "reason_count": len(one_door_out.get("reasons") or ()),
+        "duration_ms": round(max(0.0, float(duration_ms)), 2),
+    }
+    with _SWARM_HISTORY_LOCK:
+        _SWARM_HISTORY.append(summary)
+    return dict(summary)
+
+
+def get_swarm_history(limit: int | None = None) -> list[dict[str, Any]]:
+    """Return up to MAX_SWARM_HISTORY sanitized recent swarm run summaries (newest first)."""
+    with _SWARM_HISTORY_LOCK:
+        items = list(reversed(_SWARM_HISTORY))
+    if limit is not None:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise SwarmPolicyError("history limit must be a non-negative integer")
+        items = items[: min(limit, MAX_SWARM_HISTORY)]
+    return [dict(entry) for entry in items]
+
+
+def clear_swarm_history() -> None:
+    """Clear the bounded in-memory swarm run history."""
+    with _SWARM_HISTORY_LOCK:
+        _SWARM_HISTORY.clear()
+
+
 def get_swarm_policy() -> dict[str, Any]:
     """Return static, non-sensitive swarm capabilities and security policy metadata."""
     return {
@@ -386,6 +449,9 @@ def get_swarm_policy() -> dict[str, Any]:
         "max_slices": MAX_SWARM_SLICES,
         "max_slice_evidence_items": MAX_SLICE_EVIDENCE_ITEMS,
         "max_slice_timeout_seconds": MAX_SLICE_TIMEOUT_SECONDS,
+        "max_verify_snippets": MAX_VERIFY_SNIPPETS,
+        "max_verify_snippet_chars": MAX_VERIFY_SNIPPET_CHARS,
+        "history_limit": MAX_SWARM_HISTORY,
         "supported_providers": ["local", "xai", "grok"],
         "read_only_worker_tools": sorted(READ_ONLY_WORKER_TOOLS),
         "forbidden_write_tools": sorted(FORBIDDEN_WRITE_TOOLS),
@@ -410,8 +476,10 @@ def run_swarm_orchestration(
     text_generator: Any = None,
     api_key: str | None = None,
     opener: Any = None,
+    record_history: bool = True,
 ) -> dict[str, Any]:
     """Execute a validated EvidenceRAG SwarmWorkOrder across isolated read-only worker threads."""
+    run_started = time.monotonic()
     if not isinstance(work_order, SwarmWorkOrder):
         raise SwarmPolicyError("work_order must be a SwarmWorkOrder instance")
 
@@ -626,6 +694,20 @@ def run_swarm_orchestration(
         require_traceability=work_order.require_traceability,
     )
 
+    total_duration_ms = round((time.monotonic() - run_started) * 1000.0, 2)
+    if record_history:
+        _record_swarm_run(
+            order_id=order_id,
+            provider=resolved_provider,
+            model_name=resolved_model,
+            max_workers=effective_workers,
+            slice_results=slice_results,
+            injection_summary=injection_summary,
+            traceability=corpus_traceability,
+            one_door_out=one_door_out,
+            duration_ms=total_duration_ms,
+        )
+
     return {
         "order_id": order_id,
         "question": question,
@@ -633,6 +715,7 @@ def run_swarm_orchestration(
         "model_name": resolved_model,
         "max_workers": effective_workers,
         "slice_timeout_seconds": default_timeout,
+        "duration_ms": total_duration_ms,
         "disjoint_ownership": ownership_map,
         "slices": slice_results,
         "merged_summary": merged_summary,
@@ -641,3 +724,159 @@ def run_swarm_orchestration(
         "one_door_out": one_door_out,
         "security_invariants": get_swarm_policy()["invariants"],
     }
+
+
+def _sanitize_snippet_source(raw_source: Any, index: int) -> str:
+    """Normalize an optional snippet source label into a safe, bounded identifier."""
+    text = str(raw_source or "").strip()
+    if not text:
+        return f"snippet-{index}"
+    cleaned = "".join(ch if (32 <= ord(ch) < 127) else "_" for ch in text)
+    cleaned = re.sub(r"[^a-zA-Z0-9._:-]+", "_", cleaned).strip("._:-")
+    if not cleaned:
+        return f"snippet-{index}"
+    return cleaned[:64]
+
+
+def run_swarm_verify(
+    query: str,
+    snippets: Sequence[str | Mapping[str, Any]],
+    *,
+    answer: str | None = None,
+    order_id: str | None = None,
+    max_workers: int = DEFAULT_SWARM_WORKERS,
+    slice_timeout_seconds: float = DEFAULT_SLICE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Run hardened read-only parallel evidence-grounding + prompt-injection audit over bounded snippets.
+
+    Enforces:
+    - 1..12 snippets, max 4000 chars per snippet, max 4000 chars query
+    - Strictly local deterministic execution (zero side effects, zero network egress)
+    - Disjoint per-snippet slice ownership and read-only worker tools
+    - Full one_door_out metadata and bounded sanitized history recording
+    """
+    started = time.monotonic()
+    clean_query = str(query or "").strip()
+    if not clean_query:
+        raise SwarmPolicyError("query must not be empty")
+    if len(clean_query) > MAX_QUESTION_CHARS:
+        raise SwarmPolicyError(f"query exceeds maximum length of {MAX_QUESTION_CHARS} characters")
+
+    if not isinstance(snippets, (list, tuple)) or not snippets:
+        raise SwarmPolicyError("snippets must be a non-empty list")
+    if len(snippets) > MAX_VERIFY_SNIPPETS:
+        raise SwarmPolicyError(f"snippets count exceeds maximum of {MAX_VERIFY_SNIPPETS}")
+
+    clean_answer: str | None = None
+    if answer is not None:
+        if not isinstance(answer, str):
+            raise SwarmPolicyError("answer must be a string when provided")
+        stripped_answer = answer.strip()
+        if len(stripped_answer) > MAX_QUESTION_CHARS:
+            raise SwarmPolicyError(
+                f"answer exceeds maximum length of {MAX_QUESTION_CHARS} characters"
+            )
+        if stripped_answer:
+            clean_answer = stripped_answer
+
+    resolved_order_id = (
+        _normalize_id(order_id, "order_id")
+        if order_id is not None and str(order_id).strip()
+        else f"verify-{uuid.uuid4().hex[:12]}"
+    )
+
+    slices: list[SwarmSlice] = []
+    all_evidence: list[dict[str, Any]] = []
+    for idx, raw_snippet in enumerate(snippets, start=1):
+        if isinstance(raw_snippet, str):
+            raw_text = raw_snippet
+            source_label = f"snippet-{idx}"
+        elif isinstance(raw_snippet, Mapping):
+            raw_text = raw_snippet.get("text")
+            if not isinstance(raw_text, str):
+                raise SwarmPolicyError(f"snippet[{idx}] text must be a string")
+            source_label = _sanitize_snippet_source(
+                raw_snippet.get("source") or raw_snippet.get("filename") or raw_snippet.get("id"),
+                idx,
+            )
+        else:
+            raise SwarmPolicyError(f"snippet[{idx}] must be a string or mapping with 'text'")
+
+        if not raw_text.strip():
+            raise SwarmPolicyError(f"snippet[{idx}] must not be empty")
+        if len(raw_text) > MAX_VERIFY_SNIPPET_CHARS:
+            raise SwarmPolicyError(
+                f"snippet[{idx}] exceeds maximum length of {MAX_VERIFY_SNIPPET_CHARS} characters"
+            )
+
+        chunk_key = f"snippet-{idx}:{source_label}"
+        evidence_item = {
+            "chunk_id": chunk_key,
+            "source": source_label,
+            "filename": source_label,
+            "text": raw_text,
+        }
+        all_evidence.append(evidence_item)
+        slices.append(
+            SwarmSlice(
+                slice_id=f"audit-{idx}",
+                role="evidence_grounding_audit",
+                question=clean_query,
+                evidence_items=(evidence_item,),
+                owned_sources=(chunk_key,),
+                requested_tools=(
+                    "read_chunk",
+                    "verify_citations",
+                    "inspect_injection",
+                    "trace_numbers",
+                ),
+                requested_actions=(),
+            )
+        )
+
+    work_order = SwarmWorkOrder(
+        order_id=resolved_order_id,
+        question=clean_query,
+        slices=tuple(slices),
+        provider="local",
+        model_name="local-deterministic",
+        max_workers=max_workers,
+        slice_timeout_seconds=slice_timeout_seconds,
+        requested_actions=(),
+        require_traceability=True,
+    )
+    result = run_swarm_orchestration(work_order, record_history=False)
+
+    answer_traceability: dict[str, Any] | None = None
+    one_door_out = dict(result["one_door_out"])
+    one_door_out["reasons"] = list(one_door_out.get("reasons") or ())
+    if clean_answer is not None:
+        answer_traceability = verify_traceability(clean_answer, all_evidence, question=clean_query)
+        if not answer_traceability.get("done_when_passed"):
+            if "answer:untraced_output" not in one_door_out["reasons"]:
+                one_door_out["reasons"].append("answer:untraced_output")
+            one_door_out["approval_required"] = True
+            one_door_out["status"] = "ESCALATED_FOR_APPROVAL"
+
+    effective_traceability = answer_traceability if answer_traceability is not None else result["traceability"]
+    total_duration_ms = round((time.monotonic() - started) * 1000.0, 2)
+    _record_swarm_run(
+        order_id=result["order_id"],
+        provider=result["provider"],
+        model_name=result["model_name"],
+        max_workers=result["max_workers"],
+        slice_results=result["slices"],
+        injection_summary=result["injection_summary"],
+        traceability=effective_traceability,
+        one_door_out=one_door_out,
+        duration_ms=total_duration_ms,
+    )
+
+    result["one_door_out"] = one_door_out
+    result["answer_traceability"] = answer_traceability
+    result["snippet_count"] = len(all_evidence)
+    result["read_only"] = True
+    result["side_effects"] = False
+    result["duration_ms"] = total_duration_ms
+    return result
+

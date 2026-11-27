@@ -25,10 +25,15 @@ class BodyLimitMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         path = get_route_path(scope)
-        if scope["method"] != "POST" or path not in {"/documents", "/ask"}:
+        if scope["method"] != "POST" or path not in {"/documents", "/ask", "/swarm/verify"}:
             return await self.app(scope, receive, send)
         limits = self.settings()
-        limit = limits.max_http_body_bytes if path == "/documents" else limits.max_json_body_bytes
+        if path == "/documents":
+            limit = limits.max_http_body_bytes
+        elif path == "/swarm/verify":
+            limit = getattr(limits, "max_swarm_json_body_bytes", 131072)
+        else:
+            limit = limits.max_json_body_bytes
         response = JSONResponse({"detail": f"HTTP body exceeds {limit} bytes"}, status_code=413)
         for name, value in scope.get("headers", []):
             if name.lower() == b"content-length":

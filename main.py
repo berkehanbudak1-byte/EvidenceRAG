@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_core import PydanticCustomError
 
 # Load .env before any Settings object reads the environment.
@@ -33,7 +33,19 @@ from app.rag.vector_store import DuplicateDocumentError, VectorStore, StoreWrite
 from app.rag.runtime import BusyError
 from app.rag.storage_lease import WriterLease, WriterLeaseError, drain_service
 from app.rag.diagnostics import DiagnosticsMiddleware, mark_reason
-from app.rag.swarm import get_swarm_policy
+from app.rag.swarm import (
+    DEFAULT_SLICE_TIMEOUT_SECONDS,
+    DEFAULT_SWARM_WORKERS,
+    MAX_QUESTION_CHARS,
+    MAX_SLICE_TIMEOUT_SECONDS,
+    MAX_SWARM_WORKERS,
+    MAX_VERIFY_SNIPPETS,
+    MAX_VERIFY_SNIPPET_CHARS,
+    SwarmPolicyError,
+    get_swarm_history,
+    get_swarm_policy,
+    run_swarm_verify,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -153,6 +165,85 @@ class QuestionRequest(BaseModel):
         return value
 
 
+class SwarmSnippetInput(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    text: str
+    source: str | None = Field(default=None, max_length=128)
+    id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("text")
+    @classmethod
+    def bounded_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Snippet text must not be empty")
+        if len(value) > MAX_VERIFY_SNIPPET_CHARS:
+            raise PydanticCustomError(
+                "snippet_limit",
+                "Snippet exceeds {limit} characters",
+                {"limit": MAX_VERIFY_SNIPPET_CHARS},
+            )
+        return value
+
+
+class SwarmVerifyRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    query: str
+    snippets: list[str | SwarmSnippetInput] = Field(min_length=1, max_length=MAX_VERIFY_SNIPPETS)
+    answer: str | None = None
+    order_id: str | None = Field(default=None, max_length=64)
+    max_workers: int = Field(default=DEFAULT_SWARM_WORKERS, ge=1, le=MAX_SWARM_WORKERS)
+    slice_timeout_seconds: float = Field(
+        default=DEFAULT_SLICE_TIMEOUT_SECONDS,
+        gt=0,
+        le=MAX_SLICE_TIMEOUT_SECONDS,
+    )
+
+    @field_validator("query")
+    @classmethod
+    def bounded_query(cls, value: str) -> str:
+        limit = min(rag_pipeline.settings.max_question_chars, MAX_QUESTION_CHARS)
+        if not value.strip():
+            raise ValueError("Query must not be empty")
+        if len(value) > limit:
+            raise PydanticCustomError(
+                "query_limit",
+                "Query exceeds {limit} characters",
+                {"limit": limit},
+            )
+        return value
+
+    @field_validator("snippets")
+    @classmethod
+    def bounded_snippets(cls, value: list[str | SwarmSnippetInput]) -> list[str | SwarmSnippetInput]:
+        for idx, item in enumerate(value, start=1):
+            if isinstance(item, str):
+                if not item.strip():
+                    raise ValueError(f"Snippet {idx} must not be empty")
+                if len(item) > MAX_VERIFY_SNIPPET_CHARS:
+                    raise PydanticCustomError(
+                        "snippet_limit",
+                        "Snippet exceeds {limit} characters",
+                        {"limit": MAX_VERIFY_SNIPPET_CHARS},
+                    )
+        return value
+
+    @field_validator("answer")
+    @classmethod
+    def bounded_answer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        limit = min(rag_pipeline.settings.max_question_chars, MAX_QUESTION_CHARS)
+        if len(value) > limit:
+            raise PydanticCustomError(
+                "answer_limit",
+                "Answer exceeds {limit} characters",
+                {"limit": limit},
+            )
+        return value
+
+
 @app.get("/")
 def frontend():
     return FileResponse(static_directory / "index.html")
@@ -172,12 +263,41 @@ def health_check():
 
 
 @app.get("/swarm/policy")
-def swarm_policy():
+def swarm_policy(history: bool = False):
     policy = get_swarm_policy()
-    return {
+    recent_runs = get_swarm_history()
+    payload = {
         **policy,
         "active_provider": rag_pipeline.settings.llm_provider,
+        "recent_runs": recent_runs,
     }
+    if history:
+        payload["history"] = recent_runs
+    return payload
+
+
+@app.post("/swarm/verify")
+async def swarm_verify(request: SwarmVerifyRequest):
+    _require_service_accepting()
+    normalized_snippets = [
+        item.model_dump(exclude_none=True) if isinstance(item, SwarmSnippetInput) else item
+        for item in request.snippets
+    ]
+    try:
+        return await rag_pipeline.runtime.run_async(
+            "swarm",
+            run_swarm_verify,
+            request.query,
+            normalized_snippets,
+            answer=request.answer,
+            order_id=request.order_id,
+            max_workers=request.max_workers,
+            slice_timeout_seconds=request.slice_timeout_seconds,
+        )
+    except BusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "1"}) from exc
+    except SwarmPolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/documents", openapi_extra={"requestBody": {"required": True, "content": {
