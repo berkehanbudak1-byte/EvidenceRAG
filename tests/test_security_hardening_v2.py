@@ -17,6 +17,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import warnings
 
 from app.access import (
     AccessMiddleware,
@@ -26,7 +27,16 @@ from app.access import (
     build_strict_csp,
 )
 from app.dpapi_vault import DPAPI_PREFIX, seal_secret, unseal_secret
+from app.rag import ocr
 from scripts import dpapi_vault_cli
+
+try:
+    from PIL import Image as _PIL_IMAGE, UnidentifiedImageError as _PIL_UNIDENTIFIED_ERROR
+except ImportError:
+    _PIL_IMAGE = None
+    _PIL_UNIDENTIFIED_ERROR = None
+
+_HAS_PIL = _PIL_IMAGE is not None
 
 
 class TestEvidenceRagSecurityHardening(unittest.TestCase):
@@ -458,6 +468,222 @@ class TestDpapiVaultCli(unittest.TestCase):
             self.assertEqual(payload["keys"]["EVIDENCERAG_API_KEY"]["effective"], "plaintext")
             self.assertNotIn(plain_secret, proc.stdout)
             self.assertNotIn(plain_secret, proc.stderr)
+
+
+class TestOcrUpload2ShellHardening(unittest.TestCase):
+    _EPS_ASCII = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\nshowpage\n"
+    _EPS_BINARY = b"\xc5\xd0\xd3\xc6" + b"\x00" * 28
+    _PDF_BYTES = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n"
+
+    @staticmethod
+    def _encode_image(fmt: str, size: tuple[int, int] = (20, 20), mode: str = "RGB") -> bytes:
+        assert _PIL_IMAGE is not None
+        color = 0 if mode == "1" else (255 if mode == "L" else (12, 34, 56))
+        buf = io.BytesIO()
+        _PIL_IMAGE.new(mode, size, color).save(buf, fmt)
+        return buf.getvalue()
+
+    def test_constants_and_exception_hierarchy(self) -> None:
+        self.assertEqual(ocr.PILLOW_MAX_IMAGE_PIXELS, 16_000_000)
+        self.assertEqual(ocr.PILLOW_ALLOWED_FORMATS, ("PNG", "JPEG", "WEBP"))
+        self.assertEqual(ocr.PILLOW_MAX_BYTES, 10 * 1024 * 1024)
+        self.assertEqual(ocr.FORBIDDEN_IMAGE_SIGNATURES, (b"%!PS", b"\xc5\xd0\xd3\xc6", b"%PDF"))
+        self.assertTrue(issubclass(ocr.UnsafeImageError, ValueError))
+
+    def test_validate_image_bytes_rejects_forbidden_signatures_and_invalid_inputs(self) -> None:
+        forbidden_payloads = [
+            self._EPS_ASCII,
+            b" \t\r\n" + self._EPS_ASCII,
+            b"\x00\x00" + self._EPS_ASCII,
+            b"\x04" + self._EPS_ASCII,
+            b"\xef\xbb\xbf" + self._EPS_ASCII,
+            self._EPS_BINARY,
+            b"\x00" + self._EPS_BINARY,
+            self._PDF_BYTES,
+            b" \n" + self._PDF_BYTES,
+            b"\x00\x00" + self._PDF_BYTES,
+            b"",
+            bytearray(),
+            b"\x89PNG\r\n\x1a\n" + b"x" * ocr.PILLOW_MAX_BYTES,
+        ]
+        for payload in forbidden_payloads:
+            with self.assertRaises(ocr.UnsafeImageError):
+                ocr.validate_image_bytes(payload)
+
+        for non_bytes in (None, "not-bytes", 12345, memoryview(b"\x89PNG\r\n\x1a\n")):
+            with self.assertRaises(ocr.UnsafeImageError):
+                ocr.validate_image_bytes(non_bytes)
+
+        for bad_max_bytes in (True, False, 0, -1, "1024", 1.5, None):
+            with self.assertRaises(ValueError):
+                ocr.validate_image_bytes(b"\x89PNG\r\n\x1a\n", max_bytes=bad_max_bytes)
+
+        sample = bytearray(b"\x89PNG\r\n\x1a\nsample")
+        validated = ocr.validate_image_bytes(sample)
+        self.assertIsInstance(validated, bytes)
+        self.assertEqual(validated, bytes(sample))
+
+    def test_harden_pillow_with_stub_sets_limit_calls_init_and_strips_eps(self) -> None:
+        init_calls: list[bool] = []
+
+        class _StubImageModule:
+            MAX_IMAGE_PIXELS = 89_478_485
+            OPEN = {"PNG": object(), "EPS": object(), "JPEG": object(), "WEBP": object()}
+            ID = ["EPS", "PNG", "EPS", "JPEG", "WEBP"]
+
+            @classmethod
+            def init(cls) -> None:
+                init_calls.append(True)
+                cls.OPEN["EPS"] = object()
+                cls.ID.append("EPS")
+
+        returned = ocr.harden_pillow(_StubImageModule)
+        self.assertIs(returned, _StubImageModule)
+        self.assertEqual(init_calls, [True])
+        self.assertEqual(_StubImageModule.MAX_IMAGE_PIXELS, 16_000_000)
+        self.assertNotIn("EPS", _StubImageModule.OPEN)
+        self.assertNotIn("EPS", _StubImageModule.ID)
+        self.assertIn("PNG", _StubImageModule.OPEN)
+        self.assertEqual(_StubImageModule.ID, ["PNG", "JPEG", "WEBP"])
+
+    def test_no_pil_simulation_blocks_forbidden_signatures_and_reports_unavailable(self) -> None:
+        benign_png_stub = b"\x89PNG\r\n\x1a\nfake-png-body"
+        with mock.patch.dict(
+            sys.modules,
+            {"PIL": None, "PIL.Image": None, "numpy": None, "easyocr": None},
+        ):
+            for malicious in (self._EPS_ASCII, self._EPS_BINARY, self._PDF_BYTES, b"\x00" + self._EPS_ASCII):
+                with self.assertRaises(ocr.UnsafeImageError):
+                    ocr.open_image_safely(malicious)
+
+            for bad_max_pixels in (True, False, 0, -10, "100", 12.5):
+                with self.assertRaises(ValueError):
+                    ocr.open_image_safely(benign_png_stub, max_pixels=bad_max_pixels)
+
+            with self.assertRaises(ocr.OCRUnavailableError):
+                ocr.open_image_safely(benign_png_stub)
+
+            with self.assertRaises(ocr.OCRUnavailableError):
+                ocr.harden_pillow()
+
+            self.assertEqual(ocr.read_page_images(SimpleNamespace(images=[])), "")
+
+            for malicious in (self._EPS_ASCII, self._EPS_BINARY, self._PDF_BYTES, b""):
+                malicious_page = SimpleNamespace(images=[SimpleNamespace(data=malicious)])
+                with self.assertRaises(ocr.UnsafeImageError):
+                    ocr.read_page_images(malicious_page)
+
+            benign_page = SimpleNamespace(images=[SimpleNamespace(data=benign_png_stub)])
+            with self.assertRaises(ocr.OCRUnavailableError):
+                ocr.read_page_images(benign_page)
+
+    @unittest.skipUnless(_HAS_PIL, "Pillow not installed")
+    def test_open_image_safely_allows_safe_formats_strips_eps_rejects_gif_and_keeps_pdf_save(self) -> None:
+        assert _PIL_IMAGE is not None and _PIL_UNIDENTIFIED_ERROR is not None
+        for fmt in ("PNG", "JPEG", "WEBP"):
+            raw = self._encode_image(fmt, size=(20, 20))
+            with ocr.open_image_safely(raw) as opened:
+                self.assertEqual(opened.format, fmt)
+                self.assertEqual(opened.size, (20, 20))
+
+        self.assertEqual(_PIL_IMAGE.MAX_IMAGE_PIXELS, 16_000_000)
+        self.assertNotIn("EPS", _PIL_IMAGE.OPEN)
+        self.assertNotIn("EPS", _PIL_IMAGE.ID)
+
+        gif_raw = self._encode_image("GIF", size=(16, 16))
+        with self.assertRaises(_PIL_UNIDENTIFIED_ERROR):
+            ocr.open_image_safely(gif_raw)
+
+        # Bare Image.open must also refuse EPS after harden_pillow strips the EPS plugin.
+        with self.assertRaises(_PIL_UNIDENTIFIED_ERROR):
+            _PIL_IMAGE.open(io.BytesIO(self._EPS_ASCII))
+
+        # Saving synthetic PDF fixtures via Pillow continues to work after EPS stripping.
+        pdf_buf = io.BytesIO()
+        _PIL_IMAGE.new("L", (20, 20), 255).save(pdf_buf, "PDF")
+        self.assertTrue(pdf_buf.getvalue().startswith(b"%PDF-"))
+
+    @unittest.skipUnless(_HAS_PIL, "Pillow not installed")
+    def test_open_image_safely_enforces_decompression_bomb_limits_including_warning_band(self) -> None:
+        assert _PIL_IMAGE is not None
+        png_20x20 = self._encode_image("PNG", size=(20, 20))
+
+        # >2x limit (400 px vs 100 px)
+        with self.assertRaises(_PIL_IMAGE.DecompressionBombError):
+            ocr.open_image_safely(png_20x20, max_pixels=100)
+
+        # 1x..2x Pillow warning-only band (400 px vs 250 px) must still raise hard error before load()
+        with self.assertRaises(_PIL_IMAGE.DecompressionBombError):
+            ocr.open_image_safely(png_20x20, max_pixels=250)
+
+        # Exact boundary succeeds
+        with ocr.open_image_safely(png_20x20, max_pixels=400) as exact:
+            self.assertEqual(exact.size, (20, 20))
+
+        # Real 20.25 MP PNG sits inside Pillow's 1x..2x warning band above 16 MP;
+        # open_image_safely must reject it even if caller requests a higher max_pixels.
+        bomb_20mp = self._encode_image("PNG", size=(4500, 4500), mode="1")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", _PIL_IMAGE.DecompressionBombWarning)
+            with self.assertRaises(_PIL_IMAGE.DecompressionBombError):
+                ocr.open_image_safely(bomb_20mp)
+            with self.assertRaises(_PIL_IMAGE.DecompressionBombError):
+                ocr.open_image_safely(bomb_20mp, max_pixels=50_000_000)
+
+    @unittest.skipUnless(_HAS_PIL, "Pillow not installed")
+    def test_read_page_images_extracts_safe_skips_benign_and_propagates_unsafe(self) -> None:
+        assert _PIL_IMAGE is not None
+        fake_reader = SimpleNamespace(
+            readtext=lambda arr, detail=0, paragraph=True: ["Metin okundu"]
+        )
+
+        # Use real numpy when available, or a tiny pure-Python stub when running without numpy.
+        numpy_patch = contextlib.nullcontext()
+        try:
+            import numpy as _  # noqa: F401
+        except ImportError:
+            numpy_stub = SimpleNamespace(array=lambda img: img.tobytes())
+            numpy_patch = mock.patch.dict(sys.modules, {"numpy": numpy_stub})
+
+        png_bytes = self._encode_image("PNG", size=(16, 16))
+        jpeg_bytes = self._encode_image("JPEG", size=(16, 16))
+        webp_bytes = self._encode_image("WEBP", size=(16, 16))
+        gif_bytes = self._encode_image("GIF", size=(16, 16))
+        jbig2_opaque = b"\x97\x4a\x42\x32\x0d\x0a\x1a\x0a" + b"\x00" * 32
+        bomb_20mp = self._encode_image("PNG", size=(4500, 4500), mode="1")
+
+        with numpy_patch, mock.patch.object(ocr, "get_reader", return_value=fake_reader):
+            for safe_bytes in (png_bytes, jpeg_bytes, webp_bytes):
+                page = SimpleNamespace(images=[SimpleNamespace(data=safe_bytes)])
+                self.assertEqual(ocr.read_page_images(page, languages=("tr",)), "Metin okundu")
+
+            # Benign unsupported embedded formats (GIF, JBIG2) are skipped without failing the page.
+            benign_only = SimpleNamespace(
+                images=[SimpleNamespace(data=gif_bytes), SimpleNamespace(data=jbig2_opaque)]
+            )
+            self.assertEqual(ocr.read_page_images(benign_only, languages=("tr",)), "")
+
+            mixed_benign = SimpleNamespace(
+                images=[SimpleNamespace(data=jbig2_opaque), SimpleNamespace(data=png_bytes)]
+            )
+            self.assertEqual(ocr.read_page_images(mixed_benign, languages=("tr",)), "Metin okundu")
+
+            # Malicious signatures, oversized streams, and decompression bombs must NEVER be swallowed.
+            oversized = b"\x89PNG\r\n\x1a\n" + b"0" * ocr.PILLOW_MAX_BYTES
+            for malicious in (self._EPS_ASCII, self._EPS_BINARY, self._PDF_BYTES, oversized, b""):
+                bad_page = SimpleNamespace(
+                    images=[SimpleNamespace(data=png_bytes), SimpleNamespace(data=malicious)]
+                )
+                with self.assertRaises(ocr.UnsafeImageError):
+                    ocr.read_page_images(bad_page, languages=("tr",))
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", _PIL_IMAGE.DecompressionBombWarning)
+                bomb_page = SimpleNamespace(
+                    images=[SimpleNamespace(data=png_bytes), SimpleNamespace(data=bomb_20mp)]
+                )
+                with self.assertRaises(ocr.UnsafeImageError):
+                    ocr.read_page_images(bomb_page, languages=("tr",))
 
 
 if __name__ == "__main__":

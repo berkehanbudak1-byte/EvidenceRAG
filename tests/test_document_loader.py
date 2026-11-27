@@ -109,12 +109,15 @@ def test_native_corrupt_pdf_is_document_error(tmp_path):
     with pytest.raises(DocumentError, match="Could not read PDF"):
         load_document(path)
 
+import io
+from types import SimpleNamespace
+import warnings
 import pytest
 from PIL import Image
 
 from app.rag import document_loader
 from app.rag.document_loader import EmptyDocumentError, load_document
-from app.rag.ocr import OCRUnavailableError
+from app.rag.ocr import OCRUnavailableError, UnsafeImageError
 
 
 @pytest.fixture
@@ -163,3 +166,75 @@ def test_text_files_are_not_marked_as_ocr(tmp_path):
     pages = load_document(path, ocr_languages=["tr"])
 
     assert "ocr" not in pages[0]["metadata"]
+
+
+def test_legitimate_pdf_still_loads_with_ocr_hardening(tmp_path):
+    path = tmp_path / "legitimate.pdf"
+    write_pdf(path, ["Kanit belgesi 2026"])
+
+    pages = load_document(path, ocr_languages=["tr"])
+
+    assert len(pages) == 1
+    assert pages[0]["text"] == "Kanit belgesi 2026"
+    assert "ocr" not in pages[0]["metadata"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\nshowpage\n",
+        b"\xc5\xd0\xd3\xc6" + b"\x00" * 28,
+    ],
+)
+def test_eps_disguised_as_pdf_is_rejected_with_document_error(tmp_path, payload):
+    path = tmp_path / "disguised.pdf"
+    path.write_bytes(payload)
+
+    with pytest.raises(DocumentError, match="Could not read PDF"):
+        load_document(path, ocr_languages=["tr"])
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\nshowpage\n",
+        b"\xc5\xd0\xd3\xc6" + b"\x00" * 28,
+        b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n",
+    ],
+)
+def test_scanned_pdf_propagates_unsafe_image_error_for_malicious_embedded_streams(
+    scanned_pdf, monkeypatch, payload
+):
+    fake_page = SimpleNamespace(
+        extract_text=lambda: "",
+        images=[SimpleNamespace(data=payload)],
+    )
+    monkeypatch.setattr(
+        document_loader,
+        "PdfReader",
+        lambda _path: SimpleNamespace(pages=[fake_page]),
+    )
+
+    with pytest.raises(UnsafeImageError):
+        load_document(scanned_pdf, ocr_languages=["tr"])
+
+
+def test_scanned_pdf_propagates_unsafe_image_error_for_decompression_bomb_stream(
+    scanned_pdf, monkeypatch
+):
+    buf = io.BytesIO()
+    Image.new("1", (4500, 4500), 0).save(buf, "PNG")
+    fake_page = SimpleNamespace(
+        extract_text=lambda: "",
+        images=[SimpleNamespace(data=buf.getvalue())],
+    )
+    monkeypatch.setattr(
+        document_loader,
+        "PdfReader",
+        lambda _path: SimpleNamespace(pages=[fake_page]),
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        with pytest.raises(UnsafeImageError):
+            load_document(scanned_pdf, ocr_languages=["tr"])
